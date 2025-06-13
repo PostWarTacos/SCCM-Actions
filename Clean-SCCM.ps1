@@ -42,60 +42,107 @@ foreach ( $a in $apps ) {
     $inCI = (Get-CMConfigurationItem -WarningAction SilentlyContinue | Where-Object { $_.References -contains $id }).Count -gt 0
 
     if  (-not $isDeployed -and -not $inTS -and -not $inBaseline -and -not $inCI ) {
+        $folderPath = (Get-CMFolder -FolderType Application | Where-Object {
+            $_.ContainerNodeID -eq $a.ContainerNodeNodeID
+        }).Path
         $unusedApps += [PSCustomObject]@{
             ApplicationName = $name
-            CI_ID = $id
+            CI_ID           = $id
+            FolderPath      = $folderPath
         }
     }
 }
 Export-Unused -Objects $unusedApps -TypeName "Unused_Applications"
 
 # 2. Unused Device Collections (no members + no deployments)
-$unusedDeviceCollections = Get-CMDeviceCollection -WarningAction SilentlyContinue | Where-Object {
-    ( $_.MemberCount -eq 0 ) -and
-    ( -not ( Get-CMDeployment -CollectionName $_.Name -WarningAction SilentlyContinue )) -and
-    ( -not $_.IsBuiltIn )
+$deviceCollections = Get-CMDeviceCollection
+$deviceLimitingIDs = $deviceCollections | Select-Object -ExpandProperty LimitToCollectionID
+
+
+$unusedDeviceCollections = foreach ($col in $deviceCollections) {
+    if (
+        ($col.MemberCount -eq 0) -and
+        (-not (Get-CMDeployment -CollectionName $col.Name)) -and
+        (-not $col.IsBuiltIn) -and
+        ($deviceLimitingIDs -notcontains $col.CollectionID)
+    ) {
+        $folderPath = (Get-CMFolder -FolderType Collection -CollectionType Device | Where-Object {
+            $_.ContainerNodeID -eq $col.ContainerNodeID
+        }).Path
+
+        [PSCustomObject]@{
+            Name                 = $col.Name
+            CollectionID         = $col.CollectionID
+            MemberCount          = $col.MemberCount
+            LimitingCollection   = $col.LimitToCollectionName
+            FolderPath           = $folderPath
+        }
+    }
 }
 Export-Unused -Objects $unusedDeviceCollections -TypeName "Unused_Device_Collections"
 
-# 3. Unused User Collections
-$unusedUserCollections = Get-CMUserCollection -WarningAction SilentlyContinue | Where-Object {
-    ( $_.MemberCount -eq 0 ) -and
-    ( -not ( Get-CMDeployment -CollectionName $_.Name  -WarningAction SilentlyContinue )) -and
-    ( -not $_.IsBuiltIn )
-}
-Export-Unused -Objects $unusedUserCollections -TypeName "Unused_User_Collections"
-
-# 4. Expired Deployments
+# 3. Expired Deployments
 $expiredDeployments = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object {
     $_.Schedule.EndTime -lt ( Get-Date )
+} | ForEach-Object {
+    $folderPath = (Get-CMFolder -FolderType Deployment | Where-Object {
+        $_.ContainerNodeID -eq $_.ContainerNodeID
+    }).Path
+
+    $_ | Add-Member -MemberType NoteProperty -Name FolderPath -Value $folderPath -PassThru
 }
 Export-Unused -Objects $expiredDeployments -TypeName "Expired_Deployments"
 
-# 5. Unused Task Sequences (not deployed)
-$deployedTS = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "TaskSequence" } | Select-Object -ExpandProperty PackageName
-$unusedTS = Get-CMTaskSequence -WarningAction SilentlyContinue | Where-Object {
-    $deployedTS -notcontains $_.Name
-}
+# 4. Unused Task Sequences (not deployed)
+$deployedTS = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "TaskSequence" } | Select-Object PackageName
+$unusedTS = Get-CMTaskSequence -WarningAction SilentlyContinue | Where-Object { $deployedTS -notcontains $_.Name
+} | ForEach-Object {
+        $folderPath = (Get-CMFolder -FolderType TaskSequence | Where-Object {
+            $_.ContainerNodeID -eq $_.ContainerNodeID
+        }).Path
+
+        $_ | Add-Member -MemberType NoteProperty -Name FolderPath -Value $folderPath -PassThru
+    }
 Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
 
-# 6. Unused Configuration Items (no deployment, not in baseline)
+# 5. Unused Configuration Items (no deployment, not in baseline)
 $allCI = Get-CMConfigurationItem -WarningAction SilentlyContinue
 $usedCIs = @()
 foreach ($baseline in $baselines) {
     $usedCIs += $baseline.CIRelation
 }
 $usedCIIDs = $usedCIs | Select-Object -ExpandProperty CI_ID -Unique
-$unusedCIs = $allCI | Where-Object {
-    $usedCIIDs -notcontains $_.CI_ID
+$unusedCIs = $allCI | Where-Object { $usedCIIDs -notcontains $_.CI_ID
+} | ForEach-Object {
+    $folderPath = (Get-CMFolder -FolderType ConfigurationItem | Where-Object {
+        $_.ContainerNodeID -eq $_.ContainerNodeID
+    }).Path
+
+    $_ | Add-Member -MemberType NoteProperty -Name FolderPath -Value $folderPath -PassThru
 }
 Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
 
-# 7. Unused Configuration Baselines (not deployed)
+# 6. Unused Configuration Baselines (not deployed)
 $deployedBaselines = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "ConfigurationBaseline" } | Select-Object -ExpandProperty SoftwareName
-$unusedBaselines = $baselines | Where-Object {
-    $deployedBaselines -notcontains $_.LocalizedDisplayName
+$unusedBaselines = $baselines | Where-Object { $deployedBaselines -notcontains $_.LocalizedDisplayName
+} | ForEach-Object {
+    $folderPath = (Get-CMFolder -FolderType ConfigurationBaseline | Where-Object {
+        $_.ContainerNodeID -eq $_.ContainerNodeID
+    }).Path
+
+    $_ | Add-Member -MemberType NoteProperty -Name FolderPath -Value $folderPath -PassThru
 }
 Export-Unused -Objects $unusedBaselines -TypeName "Unused_ConfigurationBaselines"
+
+Write-Host "All exports complete. Files saved to: $exportPath"
+
+## --------------------------------------------------------------------------------------------------------------------------
+
+## --------------------------------------------------------------------------------------------------------------------------
+
+## --------------------------------------------------------------------------------------------------------------------------
+
+
+
 
 Write-Host "All exports complete. Files saved to: $exportPath"
