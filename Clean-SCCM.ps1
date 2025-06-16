@@ -152,7 +152,7 @@ ForEach ( $ci in $unusedCIs ) {
 Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
 
 # 6. Unused Configuration Baselines (not deployed)
-# $baselines is set earlier
+# $baselines is set earlier, in section 1
 $deployedBaselines = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "ConfigurationBaseline" } |
     Select-Object -ExpandProperty SoftwareName
 $cimBaseline = Get-CimInstance -ComputerName $SiteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationBaselineInfo
@@ -165,7 +165,7 @@ ForEach ( $b in $baselines ) {
         $cim = $cimBaseline | Where-Object { $_.CI_ID -eq $b.CI_ID }
         $unusedBaselines += [PSCustomObject]@{
             Name                 = $b.LocalizedDisplayName
-            CollectionID         = $ci.CI_ID
+            CollectionID         = $b.CI_ID
             FolderPath           = $cim.ObjectPath
         }        
     }
