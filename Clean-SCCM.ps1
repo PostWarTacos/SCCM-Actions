@@ -29,7 +29,9 @@ function Export-Unused {
     Write-Host "$TypeName exported to $file"
 }
 
-# 1. Unused Applications (checking TS, deployed, baseline, and CI)
+
+# -------------------- Unused Applications (checking TS, deployed, baseline, and CI) -------------------- #
+
 $apps = Get-CMApplication -WarningAction SilentlyContinue
 $deployedApps = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "Application" } |
     Select-Object -ExpandProperty SoftwareName
@@ -66,7 +68,9 @@ foreach ( $a in $apps ) {
 }
 Export-Unused -Objects $unusedApps -TypeName "Unused_Applications"
 
-# 2. Unused Device Collections (no members + no deployments)
+
+# -------------------- Unused Device Collections (no members + no deployments) -------------------- #
+
 $deviceCollections = Get-CMDeviceCollection
 $deviceLimitingIDs = $deviceCollections | Select-Object -ExpandProperty LimitToCollectionID
 $cimDevCollections = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_Collection
@@ -91,7 +95,9 @@ foreach ($col in $deviceCollections) {
 }
 Export-Unused -Objects $unusedDeviceCollections -TypeName "Unused_Device_Collections"
 
-# 3. Expired Deployments
+
+# -------------------- Expired Deployments -------------------- #
+
 $scheduleDeployments = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_AdvertisementInfo
 $legacyPackages = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_Package
 $tsPackages     = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_TaskSequencePackage
@@ -118,7 +124,9 @@ $expiredDeployments = foreach ($dep in $scheduleDeployments) {
 }
 Export-Unused -Objects $unusedDeployments -TypeName "Expired_Deployments"
 
-# 4. Unused Task Sequences (not deployed)
+
+# -------------------- Unused Task Sequences (not deployed) -------------------- #
+
 $deployedTS = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "TaskSequence" } |
     Select-Object PackageName
 $cimTS = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_TaskSequencePackage
@@ -139,7 +147,9 @@ foreach ( $ts in $taskSeqs ) {
 }
 Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
 
-# 5. Unused Configuration Items (no deployment, not in baseline)
+
+# -------------------- Unused Configuration Items (no deployment, not in baseline) -------------------- #
+
 $allCI = Get-CMConfigurationItem -WarningAction SilentlyContinue
 $cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItem
 $usedCIs = @()
@@ -159,7 +169,9 @@ ForEach ( $ci in $unusedCIs ) {
 }
 Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
 
-# 6. Unused Configuration Baselines (not deployed)
+
+# -------------------- Unused Configuration Baselines (not deployed) -------------------- #
+
 # $baselines is set earlier
 $deployedBaselines = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "ConfigurationBaseline" } |
     Select-Object -ExpandProperty SoftwareName
