@@ -101,6 +101,7 @@ Export-Unused -Objects $unusedDeviceCollections -TypeName "Unused_Device_Collect
 $scheduleDeployments = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_AdvertisementInfo
 $legacyPackages = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_Package
 $tsPackages     = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_TaskSequencePackage
+$expiredDeployments = @()
 
 # Build a dictionary: PackageID > ObjectPath
 $pkgToPath = @{}
@@ -114,7 +115,7 @@ $expiredDeployments = foreach ($dep in $scheduleDeployments) {
     if ( $dep.ExpirationTime -and $dep.ExpirationTime -lt ( Get-Date )) {
         $objectPath = $pkgToPath[$dep.PackageID]
 
-        [PSCustomObject]@{
+        $expiredDeployments += [PSCustomObject]@{
             AdvertisementName = $dep.AdvertisementName
             PackageID         = $dep.PackageID
             ObjectPath        = $objectPath
@@ -157,14 +158,17 @@ $unusedCIs = @()
 
 foreach ( $baseline in $baselines ) { $usedCIs += $baseline.CIRelation }
 $usedCIIDs = $usedCIs | Select-Object -ExpandProperty CI_ID -Unique
-$unusedCIs = $allCI | Where-Object { $_.CI_ID -notin $usedCIIDs }
 
-ForEach ( $ci in $unusedCIs ) {
-    $cim = $cimCI | Where-Object { $_.CI_ID -eq $ci.CI_ID }
-    $unusedCIs += [PSCustomObject]@{
-        Name                 = $cim.LocalizedDisplayName
-        CollectionID         = $ci.CI_ID
-        FolderPath           = $cim.ObjectPath
+ForEach ( $ci in $allCI ) {
+    if (
+        $ci.CI_ID -notin $usedCIIDs
+    ) {
+        $cim = $cimCI | Where-Object { $_.CI_ID -eq $ci.CI_ID }
+        $unusedCIs += [PSCustomObject]@{
+            Name                 = $cim.LocalizedDisplayName
+            CollectionID         = $ci.CI_ID
+            FolderPath           = $cim.ObjectPath
+        }
     }
 }
 Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
