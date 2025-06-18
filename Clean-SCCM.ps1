@@ -111,7 +111,7 @@ foreach ( $pkg in $legacyPackages + $tsPackages ) {
     }
 }
 
-$expiredDeployments = foreach ($dep in $scheduleDeployments) {
+foreach ($dep in $scheduleDeployments) {
     if ( $dep.ExpirationTime -and $dep.ExpirationTime -lt ( Get-Date )) {
         $objectPath = $pkgToPath[$dep.PackageID]
 
@@ -123,7 +123,7 @@ $expiredDeployments = foreach ($dep in $scheduleDeployments) {
         }
     }
 }
-Export-Unused -Objects $unusedDeployments -TypeName "Expired_Deployments"
+Export-Unused -Objects $expiredDeployments -TypeName "Expired_Deployments"
 
 
 # -------------------- Unused Task Sequences (not deployed) -------------------- #
@@ -152,7 +152,7 @@ Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
 # -------------------- Unused Configuration Items (no deployment, not in baseline) -------------------- #
 
 $allCI = Get-CMConfigurationItem -WarningAction SilentlyContinue
-$cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItem
+$cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItemLatest
 $usedCIs = @()
 $unusedCIs = @()
 
