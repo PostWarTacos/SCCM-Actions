@@ -29,27 +29,70 @@ function Export-Unused {
     Write-Host "$TypeName exported to $file"
 }
 
+# -------------------- Variables -------------------- #
+
+# List of ALL items
+$appList = Get-CMApplication -WarningAction SilentlyContinue
+$tsList = Get-CMTaskSequence -WarningAction SilentlyContinue
+$baselineList = Get-CMBaseline -WarningAction SilentlyContinue
+$ciList = Get-CMConfigurationItem -WarningAction SilentlyContinue
+$devCollList = Get-CMDeviceCollection -WarningAction SilentlyContinue
+$ciList = Get-CMConfigurationItem -WarningAction SilentlyContinue
+
+# Deployed lists
+$deployedApps = Get-CMApplicationDeployment -WarningAction SilentlyContinue
+$deploymentColls = Get-CMCollection | select -ExpandProperty CollectionName
+## get-cmdeployment
+$deployedPackageIDs = Get-CMTaskSequenceDeployment -WarningAction SilentlyContinue |
+    Group-Object packageid | Select-Object -ExpandProperty name
+$deployedBaselinesID = Get-CMBaselineDeployment -WarningAction SilentlyContinue |
+    Select-Object -ExpandProperty AssignedCI_UniqueID
+$deviceLimitingIDs = $devCollList | Select-Object -ExpandProperty LimitToCollectionID
+
+# CIM commands
+$cimApps = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ApplicationLatest
+$ciLinks = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_CIRelation |
+    Where-Object { $_.RelationType -eq 1 -and $baselineIDs -contains $_.FromCIID } |
+    Select-Object -ExpandProperty ToCIID -Unique
+$appCIs = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItem |
+    Where-Object { $_.CIType_Id -eq 2 }
+$cimDevCollections = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_Collection
+$scheduleDeployments = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_AdvertisementInfo
+$legacyPackages = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_Package
+$cimBaseline = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationBaselineInfo
+$cimTS = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_TaskSequencePackage
+$cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItemLatest
+
+
+# -------------------- Arrays -------------------- #
+
+$unusedDeviceCollections = @()
+$unusedApps = @()
+$expiredDeployments = @()
+$unusedTS = @()
+$unusedCIs = @()
+$unusedBaselines = @()
 
 # -------------------- Unused Applications (checking TS, deployed, baseline, and CI) -------------------- #
 
-$apps = Get-CMApplication -WarningAction SilentlyContinue
-$deployedApps = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "Application" } |
-    Select-Object -ExpandProperty SoftwareName
-$tsList = Get-CMTaskSequence -WarningAction SilentlyContinue
-$baselines = Get-CMBaseline -WarningAction SilentlyContinue
-$usedCI_IDs = $baselines.CIRelation | ForEach-Object { $_.CI_ID } | Select-Object -Unique
-$cimApps = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ApplicationLatest
-$unusedApps = @()
+foreach ( $a in $appList ) {
+    $escapedModelName = [WildcardPattern]::Escape($a.ModelName)
+    $escapedPackageID = [WildcardPattern]::Escape($a.PackageID)
+    
+    $inTS += $tsList | Where-Object {
+        $_.Sequence -like "*$escapedModelName*"
+    }
+    
+    $inCI += $ciList | Where-Object {
+        $_.Sequence -like "*$escapedPackageID*"
+    }
 
-foreach ( $a in $apps ) {
-    $name = $a.LocalizedDisplayName
-    $ci = $a.CI_UniqueID
-    $id = $a.CI_ID
+    $isDeployed += $deployedApps | Where-Object {
+        $_.applicationname -contains $a.LocalizedDisplayName -and
+        $_.AssignedCI_UniqueID -contains $a.CI_UniqueID
+    }
 
-    $isDeployed = $deployedApps -contains $name
-    $inTS = $tsList | Where-Object { ( [xml]$_.Sequence ).InnerXml -match $ci }
-    $inBaseline = $usedCI_IDs -contains $app.CI_ID
-    $inCI = (Get-CMConfigurationItem -WarningAction SilentlyContinue | Where-Object { $_.References -contains $id }).Count -gt 0
+    $inBaseline = $appCIs | Where-Object { $ciLinks -contains $_.CI_ID } 
 
     if  ( 
         -not $isDeployed -and
@@ -58,10 +101,10 @@ foreach ( $a in $apps ) {
         -not $inCI
     ) {
         $folderPath = ($devFolders | Where-Object { $_.ID -eq $a.ContainerNodeNodeID }).Path
-        $cim = $cimApps | Where-Object { $_.CI_ID -eq $a.CI_ID }
+        $cim = $cimApps | Where-Object { $_.CI_UniqueID -eq $a.CI_UniqueID }
         $unusedApps += [PSCustomObject]@{
-            ApplicationName = $name
-            CI_ID           = $id
+            ApplicationName = $a.LocalizedDisplayName
+            CI_UniqueID     = $a.CI_UniqueID
             FolderPath      = $cim.ObjectPath
         }
     }
@@ -71,15 +114,10 @@ Export-Unused -Objects $unusedApps -TypeName "Unused_Applications"
 
 # -------------------- Unused Device Collections (no members + no deployments) -------------------- #
 
-$deviceCollections = Get-CMDeviceCollection
-$deviceLimitingIDs = $deviceCollections | Select-Object -ExpandProperty LimitToCollectionID
-$cimDevCollections = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_Collection
-$unusedDeviceCollections = @()
-
-foreach ($col in $deviceCollections) {
+foreach ($col in $devCollList) {
     if (
         ( $col.MemberCount -eq 0 ) -and
-        ( -not (Get-CMDeployment -CollectionName $col.Name )) -and
+        ( $col.name -notin $deploymentColls ) -and
         ( -not $col.IsBuiltIn ) -and
         ( $deviceLimitingIDs -notcontains $col.CollectionID )
     ) {
@@ -87,7 +125,6 @@ foreach ($col in $deviceCollections) {
         $unusedDeviceCollections += [PSCustomObject]@{
             Name                 = $col.Name
             CollectionID         = $col.CollectionID
-            MemberCount          = $col.MemberCount
             LimitingCollection   = $col.LimitToCollectionName
             FolderPath           = $cim.ObjectPath
         }
@@ -98,14 +135,9 @@ Export-Unused -Objects $unusedDeviceCollections -TypeName "Unused_Device_Collect
 
 # -------------------- Expired Deployments -------------------- #
 
-$scheduleDeployments = Get-CimInstance -computername $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_AdvertisementInfo
-$legacyPackages = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_Package
-$tsPackages     = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$siteCode" -ClassName SMS_TaskSequencePackage
-$expiredDeployments = @()
-
 # Build a dictionary: PackageID > ObjectPath
 $pkgToPath = @{}
-foreach ( $pkg in $legacyPackages + $tsPackages ) {
+foreach ( $pkg in $legacyPackages + $cimTS ) {
     if ( $pkg.PackageID -and $pkg.ObjectPath ) {
         $pkgToPath[$pkg.PackageID] = $pkg.ObjectPath
     }
@@ -128,21 +160,15 @@ Export-Unused -Objects $expiredDeployments -TypeName "Expired_Deployments"
 
 # -------------------- Unused Task Sequences (not deployed) -------------------- #
 
-$deployedTS = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "TaskSequence" } |
-    Select-Object PackageName
-$cimTS = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_TaskSequencePackage
-$taskSeqs = Get-CMTaskSequence -WarningAction SilentlyContinue
-$unusedTS = @()
-
 foreach ( $ts in $taskSeqs ) {
     if (
-        $ts.Name -notin $deployedTS
+        $ts.PackageID -notin $deployedPackageIDs
     ){
         $cim = $cimTS | Where-Object { $_.PackageID -eq $ts.PackageID }
         $unusedTS += [PSCustomObject]@{
-            Name                 = $ts.Name
-            CollectionID         = $ts.PackageID
-            FolderPath           = $cim.ObjectPath
+            Name             = $ts.Name
+            PackageID        = $ts.PackageID
+            FolderPath       = $cim.ObjectPath
         }
     }
 }
@@ -151,23 +177,13 @@ Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
 
 # -------------------- Unused Configuration Items (no deployment, not in baseline) -------------------- #
 
-$allCI = Get-CMConfigurationItem -WarningAction SilentlyContinue
-$cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationItemLatest
-$usedCIs = @()
-$unusedCIs = @()
-
-foreach ( $baseline in $baselines ) { $usedCIs += $baseline.CIRelation }
-$usedCIIDs = $usedCIs | Select-Object -ExpandProperty CI_ID -Unique
-
-ForEach ( $ci in $allCI ) {
-    if (
-        $ci.CI_ID -notin $usedCIIDs
-    ) {
-        $cim = $cimCI | Where-Object { $_.CI_ID -eq $ci.CI_ID }
+foreach ( $ci in $ciList ) {
+    if ( -not $ci.InUse -and -not $ci.IsAssigned ) {
+        $cim = $cimCI | Where-Object { $_.CI_UniqueID -eq $ci.CI_UniqueID }
         $unusedCIs += [PSCustomObject]@{
-            Name                 = $cim.LocalizedDisplayName
-            CollectionID         = $ci.CI_ID
-            FolderPath           = $cim.ObjectPath
+            Name        = $ci.LocalizedDisplayName
+            CI_UniqueID = $ci.CI_UniqueID
+            FolderPath  = $cim.ObjectPath
         }
     }
 }
@@ -176,20 +192,13 @@ Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
 
 # -------------------- Unused Configuration Baselines (not deployed) -------------------- #
 
-# $baselines is set earlier
-$deployedBaselines = Get-CMDeployment -WarningAction SilentlyContinue | Where-Object { $_.SoftwareType -eq "ConfigurationBaseline" } |
-    Select-Object -ExpandProperty SoftwareName
-$cimBaseline = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$SiteCode" -ClassName SMS_ConfigurationBaselineInfo
-$unusedBaselines = @()
-
-ForEach ( $b in $baselines ) {
-    if (
-        $_.LocalizedDisplayName -notin $deployedBaselines
-    ){
-        $cim = $cimBaseline | Where-Object { $_.CI_ID -eq $b.CI_ID }
+ForEach ( $b in $baselineList ) {
+    if ( $b.CI_UniqueID -notin $deployedBaselinesID ){
+        $cim = $cimBaseline | Where-Object { $_.CI_UniqueID -eq $b.CI_UniqueID }
+        
         $unusedBaselines += [PSCustomObject]@{
             Name                 = $b.LocalizedDisplayName
-            CollectionID         = $ci.CI_ID
+            CI_UniqueID          = $b.CI_UniqueID
             FolderPath           = $cim.ObjectPath
         }        
     }
