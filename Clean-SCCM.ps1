@@ -1,4 +1,3 @@
-
 <#
 .SYNOPSIS
     Detects unused SCCM objects: Applications, Collections, Deployments, Task Sequences,
@@ -7,6 +6,8 @@
 .NOTES
     Run from an SCCM PowerShell environment with site drive loaded (e.g., XYZ:).
 #>
+
+clear-host
 
 Import-Module ( $ENV:SMS_ADMIN_UI_PATH.Substring( 0, $ENV:SMS_ADMIN_UI_PATH.Length - 5 ) + '\ConfigurationManager.psd1')
 $siteCode = Get-PSDrive -PSProvider CMSite | Select-Object -First 1 -ExpandProperty Name
@@ -18,9 +19,13 @@ elseif( $siteCode -eq "PCI" ){
     [string]$siteServer = "SLRCP223"
 }
 
-$now = Get-Date -Format 'yyyyMMdd_HHmmss'
-$exportPath = "C:\SCCM_Cleanup_$now"
+$date = Get-Date
+$fileDate = Get-Date -Format 'yyyyMMdd_HHmmss'
+$exportPath = "C:\SCCM_Cleanup_$fileDate"
 New-Item -ItemType Directory -Path $exportPath -Force | Out-Null
+Write-Host "[$($date.ToString('MM/dd/yyyy HH:mm'))] Script started"
+Write-Host "Set drive location to $siteCode`:"
+Write-Host "Directory created at $exportPath"
 
 function Export-Unused {
     param( $Objects, $TypeName )
@@ -65,12 +70,36 @@ $cimCI = Get-CimInstance -ComputerName $siteServer -Namespace "root/SMS/site_$Si
 
 # -------------------- Arrays -------------------- #
 
-$unusedDeviceCollections = @()
+$unusedDevColl = @()
 $unusedApps = @()
 $expiredDeployments = @()
 $unusedTS = @()
 $unusedCIs = @()
 $unusedBaselines = @()
+
+$date = get-date
+Write-Host "[$($date.ToString('MM/dd/yyyy HH:mm'))] All variables created"
+
+# -------------------- Unused Device Collections (no members + no deployments) -------------------- #
+
+foreach ($col in $devCollList) {
+    if (
+        ( $col.MemberCount -eq 0 ) -and
+        ( $col.name -notin $deploymentColls ) -and
+        ( -not $col.IsBuiltIn ) -and
+        ( $deviceLimitingIDs -notcontains $col.CollectionID )
+    ) {
+        $cim = $cimDevCollections | Where-Object { $_.CollectionID -eq $col.CollectionID }
+        $unusedDevColl += [PSCustomObject]@{
+            Name                 = $col.Name
+            CollectionID         = $col.CollectionID
+            LimitingCollection   = $col.LimitToCollectionName
+            FolderPath           = $cim.ObjectPath
+        }
+    }
+}
+Export-Unused -Objects $unusedDevColl -TypeName "Unused_Device_Collections"
+
 
 # -------------------- Unused Applications (checking TS, deployed, baseline, and CI) -------------------- #
 
@@ -78,15 +107,15 @@ foreach ( $a in $appList ) {
     $escapedModelName = [WildcardPattern]::Escape($a.ModelName)
     $escapedPackageID = [WildcardPattern]::Escape($a.PackageID)
     
-    $inTS += $tsList | Where-Object {
+    $inTS = $tsList | Where-Object {
         $_.Sequence -like "*$escapedModelName*"
     }
     
-    $inCI += $ciList | Where-Object {
+    $inCI = $ciList | Where-Object {
         $_.Sequence -like "*$escapedPackageID*"
     }
 
-    $isDeployed += $deployedApps | Where-Object {
+    $isDeployed = $deployedApps | Where-Object {
         $_.applicationname -contains $a.LocalizedDisplayName -and
         $_.AssignedCI_UniqueID -contains $a.CI_UniqueID
     }
@@ -111,25 +140,19 @@ foreach ( $a in $appList ) {
 Export-Unused -Objects $unusedApps -TypeName "Unused_Applications"
 
 
-# -------------------- Unused Device Collections (no members + no deployments) -------------------- #
+# -------------------- Unused Configuration Items (no deployment, not in baseline) -------------------- #
 
-foreach ($col in $devCollList) {
-    if (
-        ( $col.MemberCount -eq 0 ) -and
-        ( $col.name -notin $deploymentColls ) -and
-        ( -not $col.IsBuiltIn ) -and
-        ( $deviceLimitingIDs -notcontains $col.CollectionID )
-    ) {
-        $cim = $cimDevCollections | Where-Object { $_.CollectionID -eq $col.CollectionID }
-        $unusedDeviceCollections += [PSCustomObject]@{
-            Name                 = $col.Name
-            CollectionID         = $col.CollectionID
-            LimitingCollection   = $col.LimitToCollectionName
-            FolderPath           = $cim.ObjectPath
+foreach ( $ci in $ciList ) {
+    if ( -not $ci.InUse -and -not $ci.IsAssigned ) {
+        $cim = $cimCI | Where-Object { $_.CI_UniqueID -eq $ci.CI_UniqueID }
+        $unusedCIs += [PSCustomObject]@{
+            Name        = $ci.LocalizedDisplayName
+            CI_UniqueID = $ci.CI_UniqueID
+            FolderPath  = $cim.ObjectPath
         }
     }
 }
-Export-Unused -Objects $unusedDeviceCollections -TypeName "Unused_Device_Collections"
+Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
 
 
 # -------------------- Expired Deployments -------------------- #
@@ -158,8 +181,8 @@ Export-Unused -Objects $expiredDeployments -TypeName "Expired_Deployments"
 
 
 # -------------------- Unused Task Sequences (not deployed) -------------------- #
-
-foreach ( $ts in $taskSeqs ) {
+<#
+foreach ( $ts in $tsList ) {
     if (
         $ts.PackageID -notin $deployedPackageIDs
     ){
@@ -170,23 +193,89 @@ foreach ( $ts in $taskSeqs ) {
             FolderPath       = $cim.ObjectPath
         }
     }
-}
-Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
-
-
-# -------------------- Unused Configuration Items (no deployment, not in baseline) -------------------- #
-
-foreach ( $ci in $ciList ) {
-    if ( -not $ci.InUse -and -not $ci.IsAssigned ) {
-        $cim = $cimCI | Where-Object { $_.CI_UniqueID -eq $ci.CI_UniqueID }
-        $unusedCIs += [PSCustomObject]@{
-            Name        = $ci.LocalizedDisplayName
-            CI_UniqueID = $ci.CI_UniqueID
-            FolderPath  = $cim.ObjectPath
+    foreach ( $c in $unusedDevColl ){
+        $escapedColl = [WildcardPattern]::Escape($col.collectionID)
+        if (
+            $ts.Sequence -like "*$escapedColl*"
+        ){
+            $cim = $cimTS | Where-Object { $_.PackageID -eq $ts.PackageID }
+            $unusedTS += [PSCustomObject]@{
+                Name             = $ts.Name
+                PackageID        = $ts.PackageID
+                FolderPath       = $cim.ObjectPath
+            }
+        }
+    }
+        foreach ( $a in $unusedApps ){
+        $escapedAppName = [WildcardPattern]::Escape($a.LocalizedDisplayName)
+        $escapedAppCi = [WildcardPattern]::Escape($a.CI_UniqueID)
+        if (
+            $ts.Sequence -like "*$escapedAppName*" -or
+            $ts.Sequence -like "*$escapedAppCi*"
+        ){
+            $cim = $cimTS | Where-Object { $_.PackageID -eq $ts.PackageID }
+            $unusedTS += [PSCustomObject]@{
+                Name             = $ts.Name
+                PackageID        = $ts.PackageID
+                FolderPath       = $cim.ObjectPath
+            }
         }
     }
 }
-Export-Unused -Objects $unusedCIs -TypeName "Unused_ConfigurationItems"
+#>
+
+#version 2
+foreach ( $ts in $tsList ) {
+    
+    if ( [string]$ts.PackageID -notin $deployedPackageIDs ){
+        $cim = $cimTS | Where-Object { $_.PackageID -eq $ts.PackageID }
+        $unusedTS += [PSCustomObject]@{
+            Name       = $ts.Name
+            PackageID  = $ts.PackageID
+            FolderPath = $cim.ObjectPath
+        }
+        $directCount++
+        continue
+    }
+    
+    $isUsedByUnusedColl = $false
+    foreach ( $c in $unusedDevColl ){
+        $escapedColl = [WildcardPattern]::Escape($c.CollectionID)
+        if ( $ts.Sequence -like "*$escapedColl*" ){
+            $isUsedByUnusedColl = $true
+            $collCount++
+            break
+        }
+    } 
+
+    $isUsedByUnusedApp = $false
+    foreach ( $a in $unusedApps ){
+        $escapedAppName = [WildcardPattern]::Escape($a.LocalizedDisplayName)
+        $escapedAppCi = [WildcardPattern]::Escape($a.CI_UniqueID)
+        if (
+            $ts.Sequence -like "*$escapedAppName*" -and
+            $ts.Sequence -like "*$escapedAppCi*"
+         ){
+            $isUsedByUnusedApp = $true
+            $appCount++
+            break
+        }
+    }
+
+    if (
+        $isUnusedDirectly -or
+        $isUsedByUnusedColl -or
+        $isUsedByUnusedApp
+    ){
+        $cim = $cimTS | Where-Object { $_.PackageID -eq $ts.PackageID }
+        $unusedTS += [PSCustomObject]@{
+            Name       = $ts.Name
+            PackageID  = $ts.PackageID
+            FolderPath = $cim.ObjectPath
+        }
+    }
+}
+Export-Unused -Objects $unusedTS -TypeName "Unused_TaskSequences"
 
 
 # -------------------- Unused Configuration Baselines (not deployed) -------------------- #
@@ -204,4 +293,5 @@ ForEach ( $b in $baselineList ) {
 }
 Export-Unused -Objects $unusedBaselines -TypeName "Unused_ConfigurationBaselines"
 
-Write-Host "All exports complete. Files saved to: $exportPath"
+$date = get-date
+Write-Host "[$($date.ToString('MM/dd/yyyy HH:mm'))] All exports complete. Files saved to: $exportPath"
