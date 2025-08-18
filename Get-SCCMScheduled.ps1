@@ -87,141 +87,99 @@ $deploymentResults = @()
 Write-Host "Retrieving deployment information..." -ForegroundColor Cyan
 
 try {
-    # Get Application Deployments
-    Write-Host "  - Processing Application Deployments..." -ForegroundColor Gray
-    $appDeployments = Get-CMApplicationDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    
-    foreach ($deployment in $appDeployments) {
-        # Get additional deployment details from WMI
-        try {
-            $wmiDeployment = Get-WmiObject -Class SMS_ApplicationAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            
-            if ($wmiDeployment) {
-                $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
-                $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.LastModificationTime)
-                
-                # Check if deployment was created or modified within the specified timeframe
-                if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
-                    $deploymentResults += [PSCustomObject]@{
-                        DeploymentType = "Application"
-                        DeploymentName = $deployment.ApplicationName
-                        CollectionName = $deployment.CollectionName
-                        ScheduledTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
-                        AvailableTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
-                        DeadlineTime = if ($deployment.DeadlineTime) { $deployment.DeadlineTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
-                        CreatedBy = $wmiDeployment.CreatedBy
-                        CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        LastModifiedBy = $wmiDeployment.LastModifiedBy
-                        LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        Purpose = $deployment.Purpose
-                        AssignmentID = $deployment.AssignmentID
-                    }
-                }
+    # Get Application Deployments (WMI only)
+    Write-Host "  - Processing Application Deployments (WMI only)..." -ForegroundColor Gray
+    $wmiAppDeployments = Get-WmiObject -Class SMS_ApplicationAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    foreach ($wmiDeployment in $wmiAppDeployments) {
+        $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
+        $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.LastModificationTime)
+        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+            $deploymentResults += [PSCustomObject]@{
+                DeploymentType = "Application"
+                DeploymentName = $wmiDeployment.ApplicationName
+                CollectionName = $wmiDeployment.CollectionName
+                ScheduledTime = if ($wmiDeployment.StartTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.StartTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($wmiDeployment.StartTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.StartTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = if ($wmiDeployment.EnforcementDeadline) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.EnforcementDeadline).ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
+                CreatedBy = $wmiDeployment.CreatedBy
+                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $wmiDeployment.LastModifiedBy
+                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = $wmiDeployment.OfferTypeID
+                AssignmentID = $wmiDeployment.AssignmentID
             }
-        } catch {
-            Write-Warning "Could not retrieve WMI data for application deployment: $($deployment.ApplicationName)"
         }
     }
     
-    # Get Package/Program Deployments
-    Write-Host "  - Processing Package Deployments..." -ForegroundColor Gray
-    $packageDeployments = Get-CMPackageDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    
-    foreach ($deployment in $packageDeployments) {
-        try {
-            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            
-            if ($wmiDeployment) {
-                $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
-                $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified)
-                
-                if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
-                    $deploymentResults += [PSCustomObject]@{
-                        DeploymentType = "Package"
-                        DeploymentName = "$($deployment.AdvertisementName) - $($deployment.ProgramName)"
-                        CollectionName = $deployment.CollectionName
-                        ScheduledTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
-                        AvailableTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
-                        DeadlineTime = if ($deployment.ExpirationTime) { $deployment.ExpirationTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
-                        CreatedBy = $wmiDeployment.SourceSite
-                        CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        LastModifiedBy = $wmiDeployment.SourceSite
-                        LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        Purpose = "N/A"
-                        AssignmentID = $deployment.AdvertisementID
-                    }
-                }
+    # Get Package/Program Deployments (WMI only)
+    Write-Host "  - Processing Package Deployments (WMI only)..." -ForegroundColor Gray
+    $wmiPackageDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    foreach ($wmiDeployment in $wmiPackageDeployments) {
+        $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
+        $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified)
+        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+            $deploymentResults += [PSCustomObject]@{
+                DeploymentType = "Package"
+                DeploymentName = "$($wmiDeployment.AdvertisementName) - $($wmiDeployment.ProgramName)"
+                CollectionName = $wmiDeployment.CollectionName
+                ScheduledTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = if ($wmiDeployment.ExpirationTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.ExpirationTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
+                CreatedBy = $wmiDeployment.SourceSite
+                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $wmiDeployment.SourceSite
+                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = "N/A"
+                AssignmentID = $wmiDeployment.AdvertisementID
             }
-        } catch {
-            Write-Warning "Could not retrieve WMI data for package deployment: $($deployment.AdvertisementName)"
         }
     }
     
-    # Get Task Sequence Deployments
-    Write-Host "  - Processing Task Sequence Deployments..." -ForegroundColor Gray
-    $tsDeployments = Get-CMTaskSequenceDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    
-    foreach ($deployment in $tsDeployments) {
-        try {
-            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            
-            if ($wmiDeployment) {
-                $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
-                $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified)
-                
-                if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
-                    $deploymentResults += [PSCustomObject]@{
-                        DeploymentType = "Task Sequence"
-                        DeploymentName = $deployment.AdvertisementName
-                        CollectionName = $deployment.CollectionName
-                        ScheduledTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
-                        AvailableTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
-                        DeadlineTime = if ($deployment.ExpirationTime) { $deployment.ExpirationTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
-                        CreatedBy = $wmiDeployment.SourceSite
-                        CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        LastModifiedBy = $wmiDeployment.SourceSite
-                        LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        Purpose = "N/A"
-                        AssignmentID = $deployment.AdvertisementID
-                    }
-                }
+    # Get Task Sequence Deployments (WMI only)
+    Write-Host "  - Processing Task Sequence Deployments (WMI only)..." -ForegroundColor Gray
+    $wmiTSDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.AdvertisementType -eq 2 }
+    foreach ($wmiDeployment in $wmiTSDeployments) {
+        $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
+        $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified)
+        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+            $deploymentResults += [PSCustomObject]@{
+                DeploymentType = "Task Sequence"
+                DeploymentName = $wmiDeployment.AdvertisementName
+                CollectionName = $wmiDeployment.CollectionName
+                ScheduledTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = if ($wmiDeployment.ExpirationTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.ExpirationTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
+                CreatedBy = $wmiDeployment.SourceSite
+                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $wmiDeployment.SourceSite
+                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = "N/A"
+                AssignmentID = $wmiDeployment.AdvertisementID
             }
-        } catch {
-            Write-Warning "Could not retrieve WMI data for task sequence deployment: $($deployment.AdvertisementName)"
         }
     }
     
-    # Get Configuration Baseline Deployments
-    Write-Host "  - Processing Configuration Baseline Deployments..." -ForegroundColor Gray
-    $baselineDeployments = Get-CMBaselineDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    
-    foreach ($deployment in $baselineDeployments) {
-        try {
-            $wmiDeployment = Get-WmiObject -Class SMS_BaselineAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            
-            if ($wmiDeployment) {
-                $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
-                $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.LastModificationTime)
-                
-                if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
-                    $deploymentResults += [PSCustomObject]@{
-                        DeploymentType = "Configuration Baseline"
-                        DeploymentName = $deployment.Assignementname
-                        CollectionName = $deployment.CollectionName
-                        ScheduledTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
-                        AvailableTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
-                        DeadlineTime = "N/A"
-                        CreatedBy = $wmiDeployment.CreatedBy
-                        CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        LastModifiedBy = $wmiDeployment.LastModifiedBy
-                        LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
-                        Purpose = "N/A"
-                        AssignmentID = $deployment.AssignmentID
-                    }
-                }
+    # Get Configuration Baseline Deployments (WMI only)
+    Write-Host "  - Processing Configuration Baseline Deployments (WMI only)..." -ForegroundColor Gray
+    $wmiBaselineDeployments = Get-WmiObject -Class SMS_BaselineAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    foreach ($wmiDeployment in $wmiBaselineDeployments) {
+        $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
+        $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.LastModificationTime)
+        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+            $deploymentResults += [PSCustomObject]@{
+                DeploymentType = "Configuration Baseline"
+                DeploymentName = $wmiDeployment.BaselineName
+                CollectionName = $wmiDeployment.CollectionName
+                ScheduledTime = if ($wmiDeployment.StartTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.StartTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($wmiDeployment.StartTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.StartTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = "N/A"
+                CreatedBy = $wmiDeployment.CreatedBy
+                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $wmiDeployment.LastModifiedBy
+                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = "N/A"
+                AssignmentID = $wmiDeployment.AssignmentID
             }
-        } catch {
-            Write-Warning "Could not retrieve WMI data for baseline deployment: $($deployment.Assignementname)"
         }
     }
     
