@@ -162,6 +162,54 @@ try {
             }
         }
     }
+
+    # Get Package/Program Deployments (SQL)
+    Write-Host "  - Processing Package Deployments (SQL)..." -ForegroundColor Gray
+    $SqlServer = "YourSCCMSQLServer"  # TODO: Set your SQL server name
+    $Database = "CM_$siteCode"
+    $SqlQuery = @"
+SELECT 
+    AdvertisementID,
+    AdvertisementName,
+    CollectionName,
+    CreationTime,
+    LastModifiedTime,
+    PresentTime,
+    ExpirationTime,
+    AdvertisementType,
+    SourceSite,
+    OfferTypeID
+FROM 
+    v_Advertisement
+WHERE 
+    (CreationTime >= DATEADD(HOUR, -$Hours, GETDATE())
+    OR LastModifiedTime >= DATEADD(HOUR, -$Hours, GETDATE()))
+    AND AdvertisementType <> 2
+ORDER BY 
+    CreationTime DESC
+"@
+    $sqlPackageResults = @()
+    try {
+        $sqlResults = Invoke-Sqlcmd -ServerInstance $SqlServer -Database $Database -Query $SqlQuery
+        foreach ($row in $sqlResults) {
+            $sqlPackageResults += [PSCustomObject]@{
+                DeploymentType = "Package (SQL)"
+                DeploymentName = $row.AdvertisementName
+                CollectionName = $row.CollectionName
+                ScheduledTime = if ($row.PresentTime) { $row.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($row.PresentTime) { $row.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = if ($row.ExpirationTime) { $row.ExpirationTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
+                CreatedBy = $row.SourceSite
+                CreatedDate = $row.CreationTime.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $row.SourceSite
+                LastModifiedDate = $row.LastModifiedTime.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = "N/A"
+                AssignmentID = $row.AdvertisementID
+            }
+        }
+    } catch {
+        Write-Error "Failed to query SQL for Package deployments: $($_.Exception.Message)"
+    }
     # Get Task Sequence Deployments (WMI only)
     Write-Host "  - Processing Task Sequence Deployments (WMI only)..." -ForegroundColor Gray
     $wmiTSDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.AdvertisementType -eq 2 }
@@ -185,6 +233,52 @@ try {
             }
         }
     }
+
+    # Get Task Sequence Deployments (SQL)
+    Write-Host "  - Processing Task Sequence Deployments (SQL)..." -ForegroundColor Gray
+    $SqlQueryTS = @"
+SELECT 
+    AdvertisementID,
+    AdvertisementName,
+    CollectionName,
+    CreationTime,
+    LastModifiedTime,
+    PresentTime,
+    ExpirationTime,
+    AdvertisementType,
+    SourceSite,
+    OfferTypeID
+FROM 
+    v_Advertisement
+WHERE 
+    (CreationTime >= DATEADD(HOUR, -$Hours, GETDATE())
+    OR LastModifiedTime >= DATEADD(HOUR, -$Hours, GETDATE()))
+    AND AdvertisementType = 2
+ORDER BY 
+    CreationTime DESC
+"@
+    $sqlTSResults = @()
+    try {
+        $sqlResultsTS = Invoke-Sqlcmd -ServerInstance $SqlServer -Database $Database -Query $SqlQueryTS
+        foreach ($row in $sqlResultsTS) {
+            $sqlTSResults += [PSCustomObject]@{
+                DeploymentType = "Task Sequence (SQL)"
+                DeploymentName = $row.AdvertisementName
+                CollectionName = $row.CollectionName
+                ScheduledTime = if ($row.PresentTime) { $row.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
+                AvailableTime = if ($row.PresentTime) { $row.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
+                DeadlineTime = if ($row.ExpirationTime) { $row.ExpirationTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
+                CreatedBy = $row.SourceSite
+                CreatedDate = $row.CreationTime.ToString('MM/dd/yyyy HH:mm:ss')
+                LastModifiedBy = $row.SourceSite
+                LastModifiedDate = $row.LastModifiedTime.ToString('MM/dd/yyyy HH:mm:ss')
+                Purpose = "N/A"
+                AssignmentID = $row.AdvertisementID
+            }
+        }
+    } catch {
+        Write-Error "Failed to query SQL for Task Sequence deployments: $($_.Exception.Message)"
+    }
 } catch {
     Write-Error "An error occurred while retrieving deployment information: $($_.Exception.Message)"
     exit 1
@@ -192,10 +286,8 @@ try {
 
 # Sort results by creation date (newest first)
 $deploymentResults = $deploymentResults | Sort-Object { [DateTime]$_.CreatedDate } -Descending
-
-# Display results
-Write-Host "`nFound $($deploymentResults.Count) deployment(s) created or modified in the last $Hours hours, since $($cutoffTime.ToString('MM/dd/yyyy HH:mm:ss')):" -ForegroundColor Green
-
+Write-Host "`n--- WMI-based Deployment Results ---" -ForegroundColor Magenta
+Write-Host "Found $($deploymentResults.Count) deployment(s) (WMI) created or modified in the last $Hours hours, since $($cutoffTime.ToString('MM/dd/yyyy HH:mm:ss')):" -ForegroundColor Green
 if ($deploymentResults.Count -gt 0) {
     if ($ExportPath) {
         # Export to CSV
@@ -216,7 +308,31 @@ if ($deploymentResults.Count -gt 0) {
         Write-Host "  $($_.Name): $($_.Count)" -ForegroundColor Cyan
     }
 } else {
-    Write-Host "No deployments found matching the criteria." -ForegroundColor Yellow
+    Write-Host "No deployments found matching the criteria (WMI)." -ForegroundColor Yellow
+}
+
+# Display SQL results for Package Deployments
+Write-Host "`n--- SQL-based Package Deployment Results ---" -ForegroundColor Magenta
+if ($sqlPackageResults -and $sqlPackageResults.Count -gt 0) {
+    $sqlPackageResults | Format-Table -AutoSize -Wrap
+    Write-Host "`nSummary by Deployment Type (SQL - Package):" -ForegroundColor Yellow
+    $sqlPackageResults | Group-Object DeploymentType | ForEach-Object {
+        Write-Host "  $($_.Name): $($_.Count)" -ForegroundColor Cyan
+    }
+} else {
+    Write-Host "No package deployments found matching the criteria (SQL)." -ForegroundColor Yellow
+}
+
+# Display SQL results for Task Sequence Deployments
+Write-Host "`n--- SQL-based Task Sequence Deployment Results ---" -ForegroundColor Magenta
+if ($sqlTSResults -and $sqlTSResults.Count -gt 0) {
+    $sqlTSResults | Format-Table -AutoSize -Wrap
+    Write-Host "`nSummary by Deployment Type (SQL - Task Sequence):" -ForegroundColor Yellow
+    $sqlTSResults | Group-Object DeploymentType | ForEach-Object {
+        Write-Host "  $($_.Name): $($_.Count)" -ForegroundColor Cyan
+    }
+} else {
+    Write-Host "No task sequence deployments found matching the criteria (SQL)." -ForegroundColor Yellow
 }
 
 Write-Host "`nScript completed successfully." -ForegroundColor Green
