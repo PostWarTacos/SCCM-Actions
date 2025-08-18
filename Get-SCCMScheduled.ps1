@@ -34,7 +34,7 @@
 
 param(
     [Parameter(Mandatory = $false)]
-    [int]$Hours = 24,
+    [int]$Hours = 500,
     
     [Parameter(Mandatory = $false)]
     [string]$ExportPath
@@ -66,17 +66,16 @@ if ($siteCode -eq "DDS") {
 } elseif ($siteCode -eq "PCI") {
     [string]$siteServer = "SLRCP223"
 } else {
-    # Try to get the site server from WMI
-    try {
-        $siteInfo = Get-WmiObject -Class SMS_Site -Namespace "root\SMS\site_$siteCode" | Select-Object -First 1
-        $siteServer = $siteInfo.ServerName
-    } catch {
-        Write-Warning "Could not determine site server automatically. Please modify the script to include your site server."
-        $siteServer = "localhost"
-    }
+    Write-Warning "Could not determine site server automatically. Please modify the script to include your site server."
+    pause
+    exit
 }
 
-Write-Host "Connected to site: $siteCode on server: $siteServer" -ForegroundColor Green
+# Example: Multicolored output in PowerShell
+Write-Host "Connected to site: " -NoNewline
+Write-Host $siteCode -ForegroundColor Green -NoNewline
+Write-Host " on server: " -NoNewline
+Write-Host $siteServer -ForegroundColor Green
 
 # Calculate cutoff time
 $cutoffTime = (Get-Date).AddHours(-$Hours)
@@ -90,12 +89,12 @@ Write-Host "Retrieving deployment information..." -ForegroundColor Cyan
 try {
     # Get Application Deployments
     Write-Host "  - Processing Application Deployments..." -ForegroundColor Gray
-    $appDeployments = Get-CMApplicationDeployment -ErrorAction SilentlyContinue
+    $appDeployments = Get-CMApplicationDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
     
     foreach ($deployment in $appDeployments) {
         # Get additional deployment details from WMI
         try {
-            $wmiDeployment = Get-WmiObject -Class SMS_ApplicationAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue
+            $wmiDeployment = Get-WmiObject -Class SMS_ApplicationAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             
             if ($wmiDeployment) {
                 $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
@@ -126,11 +125,11 @@ try {
     
     # Get Package/Program Deployments
     Write-Host "  - Processing Package Deployments..." -ForegroundColor Gray
-    $packageDeployments = Get-CMPackageDeployment -ErrorAction SilentlyContinue
+    $packageDeployments = Get-CMPackageDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
     
     foreach ($deployment in $packageDeployments) {
         try {
-            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue
+            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             
             if ($wmiDeployment) {
                 $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
@@ -139,7 +138,7 @@ try {
                 if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
                     $deploymentResults += [PSCustomObject]@{
                         DeploymentType = "Package"
-                        DeploymentName = "$($deployment.PackageName) - $($deployment.ProgramName)"
+                        DeploymentName = "$($deployment.AdvertisementName) - $($deployment.ProgramName)"
                         CollectionName = $deployment.CollectionName
                         ScheduledTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
                         AvailableTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
@@ -154,17 +153,17 @@ try {
                 }
             }
         } catch {
-            Write-Warning "Could not retrieve WMI data for package deployment: $($deployment.PackageName)"
+            Write-Warning "Could not retrieve WMI data for package deployment: $($deployment.AdvertisementName)"
         }
     }
     
     # Get Task Sequence Deployments
     Write-Host "  - Processing Task Sequence Deployments..." -ForegroundColor Gray
-    $tsDeployments = Get-CMTaskSequenceDeployment -ErrorAction SilentlyContinue
+    $tsDeployments = Get-CMTaskSequenceDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
     
     foreach ($deployment in $tsDeployments) {
         try {
-            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue
+            $wmiDeployment = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AdvertisementID = '$($deployment.AdvertisementID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             
             if ($wmiDeployment) {
                 $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
@@ -173,7 +172,7 @@ try {
                 if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
                     $deploymentResults += [PSCustomObject]@{
                         DeploymentType = "Task Sequence"
-                        DeploymentName = $deployment.TaskSequenceName
+                        DeploymentName = $deployment.AdvertisementName
                         CollectionName = $deployment.CollectionName
                         ScheduledTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
                         AvailableTime = if ($deployment.PresentTime) { $deployment.PresentTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
@@ -188,17 +187,17 @@ try {
                 }
             }
         } catch {
-            Write-Warning "Could not retrieve WMI data for task sequence deployment: $($deployment.TaskSequenceName)"
+            Write-Warning "Could not retrieve WMI data for task sequence deployment: $($deployment.AdvertisementName)"
         }
     }
     
     # Get Configuration Baseline Deployments
     Write-Host "  - Processing Configuration Baseline Deployments..." -ForegroundColor Gray
-    $baselineDeployments = Get-CMBaselineDeployment -ErrorAction SilentlyContinue
+    $baselineDeployments = Get-CMBaselineDeployment -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
     
     foreach ($deployment in $baselineDeployments) {
         try {
-            $wmiDeployment = Get-WmiObject -Class SMS_BaselineAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue
+            $wmiDeployment = Get-WmiObject -Class SMS_BaselineAssignment -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -Filter "AssignmentID = '$($deployment.AssignmentID)'" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             
             if ($wmiDeployment) {
                 $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
@@ -207,7 +206,7 @@ try {
                 if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
                     $deploymentResults += [PSCustomObject]@{
                         DeploymentType = "Configuration Baseline"
-                        DeploymentName = $deployment.BaselineName
+                        DeploymentName = $deployment.Assignementname
                         CollectionName = $deployment.CollectionName
                         ScheduledTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Not Scheduled" }
                         AvailableTime = if ($deployment.StartTime) { $deployment.StartTime.ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
@@ -222,7 +221,7 @@ try {
                 }
             }
         } catch {
-            Write-Warning "Could not retrieve WMI data for baseline deployment: $($deployment.BaselineName)"
+            Write-Warning "Could not retrieve WMI data for baseline deployment: $($deployment.Assignementname)"
         }
     }
     
@@ -235,7 +234,7 @@ try {
 $deploymentResults = $deploymentResults | Sort-Object { [DateTime]$_.CreatedDate } -Descending
 
 # Display results
-Write-Host "`nFound $($deploymentResults.Count) deployment(s) created or modified in the last $Hours hours:" -ForegroundColor Green
+Write-Host "`nFound $($deploymentResults.Count) deployment(s) created or modified in the last $Hours hours, since $($cutoffTime.ToString('MM/dd/yyyy HH:mm:ss')):" -ForegroundColor Green
 
 if ($deploymentResults.Count -gt 0) {
     if ($ExportPath) {
