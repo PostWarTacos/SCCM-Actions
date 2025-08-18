@@ -138,14 +138,14 @@ try {
 #
 #
 #
-<#
+
     # Get Package/Program Deployments (WMI only)
     Write-Host "  - Processing Package Deployments (WMI only)..." -ForegroundColor Gray
-    $wmiPackageDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    $wmiPackageDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.AdvertisementType -ne 2 }
     foreach ($wmiDeployment in $wmiPackageDeployments) {
-    $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.CreationTime)
-    $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.LastModificationTime)
-        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+        $approxCreatedDate = if ($wmiDeployment.SourceDate) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate) } else { $null }
+        $approxModifiedDate = if ($wmiDeployment.TimeLastModified) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified) } else { $null }
+        if (($approxCreatedDate -and $approxCreatedDate -ge $cutoffTime) -or ($approxModifiedDate -and $approxModifiedDate -ge $cutoffTime)) {
             $deploymentResults += [PSCustomObject]@{
                 DeploymentType = "Package"
                 DeploymentName = $wmiDeployment.AdvertisementName
@@ -154,22 +154,21 @@ try {
                 AvailableTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
                 DeadlineTime = if ($wmiDeployment.ExpirationTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.ExpirationTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
                 CreatedBy = $wmiDeployment.SourceSite
-                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                LastModifiedBy = $wmiDeployment.SourceSite
-                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                ApproxCreatedDate = if ($approxCreatedDate) { $approxCreatedDate.ToString('MM/dd/yyyy HH:mm:ss') } else { "Unknown" }
+                ApproxLastModifiedBy = $wmiDeployment.SourceSite
+                ApproxLastModifiedDate = if ($approxModifiedDate) { $approxModifiedDate.ToString('MM/dd/yyyy HH:mm:ss') } else { "Unknown" }
                 Purpose = "N/A"
                 AssignmentID = $wmiDeployment.AdvertisementID
             }
         }
     }
-    
     # Get Task Sequence Deployments (WMI only)
     Write-Host "  - Processing Task Sequence Deployments (WMI only)..." -ForegroundColor Gray
     $wmiTSDeployments = Get-WmiObject -Class SMS_Advertisement -Namespace "root\SMS\site_$siteCode" -ComputerName $siteServer -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Where-Object { $_.AdvertisementType -eq 2 }
     foreach ($wmiDeployment in $wmiTSDeployments) {
-        $createdDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate)
-        $modifiedDate = [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified)
-        if ($createdDate -ge $cutoffTime -or $modifiedDate -ge $cutoffTime) {
+        $approxCreatedDate = if ($wmiDeployment.SourceDate) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.SourceDate) } else { $null }
+        $approxModifiedDate = if ($wmiDeployment.TimeLastModified) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.TimeLastModified) } else { $null }
+        if (($approxCreatedDate -and $approxCreatedDate -ge $cutoffTime) -or ($approxModifiedDate -and $approxModifiedDate -ge $cutoffTime)) {
             $deploymentResults += [PSCustomObject]@{
                 DeploymentType = "Task Sequence"
                 DeploymentName = $wmiDeployment.AdvertisementName
@@ -178,15 +177,14 @@ try {
                 AvailableTime = if ($wmiDeployment.PresentTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.PresentTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "Immediately" }
                 DeadlineTime = if ($wmiDeployment.ExpirationTime) { [System.Management.ManagementDateTimeConverter]::ToDateTime($wmiDeployment.ExpirationTime).ToString('MM/dd/yyyy HH:mm:ss') } else { "No Deadline" }
                 CreatedBy = $wmiDeployment.SourceSite
-                CreatedDate = $createdDate.ToString('MM/dd/yyyy HH:mm:ss')
-                LastModifiedBy = $wmiDeployment.SourceSite
-                LastModifiedDate = $modifiedDate.ToString('MM/dd/yyyy HH:mm:ss')
+                ApproxCreatedDate = if ($approxCreatedDate) { $approxCreatedDate.ToString('MM/dd/yyyy HH:mm:ss') } else { "Unknown" }
+                ApproxLastModifiedBy = $wmiDeployment.SourceSite
+                ApproxLastModifiedDate = if ($approxModifiedDate) { $approxModifiedDate.ToString('MM/dd/yyyy HH:mm:ss') } else { "Unknown" }
                 Purpose = "N/A"
                 AssignmentID = $wmiDeployment.AdvertisementID
             }
         }
     }
-#>
 } catch {
     Write-Error "An error occurred while retrieving deployment information: $($_.Exception.Message)"
     exit 1
