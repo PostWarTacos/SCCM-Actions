@@ -21,58 +21,85 @@ If( -not ( Test-Path $healthLogPath )) {
 
 # Check if SCCM Client is installed
 $clientPath = "C:\Windows\CCM\CcmExec.exe"
-if ( Test-Path $clientPath ){
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed." ) | Out-Null
-} Else {
-	$healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
-    $corruption = "CcmExec.exe missing."
+try {
+    if ( Test-Path $clientPath ){
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed." ) | Out-Null
+    } else {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
+        $corruption = "CcmExec.exe missing."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
+    $corruption = "Error checking SCCM installation."
 }
 				
 # Check if SCCM Client Service is running
-$service = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
-if ( $service.Status -eq 'Running' ){
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec service and it is running." ) | Out-Null
-} Elseif ( $service.Status -ne 'Running' ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec service but it is NOT running." ) | Out-Null
-    $corruption = "CcmExec service not running."
-} Else {
-	$healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service could not be found. SCCM Client may not be installed." ) | Out-Null
+try {
+    $service = Get-Service -Name CcmExec -ErrorAction Stop
+    if ( $service.Status -eq 'Running' ){
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec service and it is running." ) | Out-Null
+    } elseif ( $service.Status -ne 'Running' ) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec service but it is NOT running." ) | Out-Null
+        $corruption = "CcmExec service not running."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service could not be found. SCCM Client may not be installed." ) | Out-Null
     $corruption = "CcmExec service missing."
 }
 
 # Check Client Version
-$smsClient = Get-WmiObject -Namespace "root\ccm" -Class SMS_Client -ErrorAction SilentlyContinue
-if ( $smsClient.ClientVersion ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Version: $( $smsClient.ClientVersion )" ) | Out-Null
-} else {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Client.ClientVersion class not found. SCCM Client may not be installed." ) | Out-Null
+try {
+    $smsClient = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Client -ErrorAction Stop
+    if ( $smsClient.ClientVersion ) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Version: $( $smsClient.ClientVersion )" ) | Out-Null
+    } else {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Client.ClientVersion class not found. SCCM Client may not be installed." ) | Out-Null
+        $corruption = "Cannot determine client version."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Client: $_" ) | Out-Null
     $corruption = "Cannot determine client version."
 }    
 
 # Check Site Code
-$mp = Get-WmiObject -Namespace "root\ccm" -Class SMS_Authority -ErrorAction SilentlyContinue
-if ( $mp.Name ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Site found: $( $MP.Name )" ) | Out-Null
-} else {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.Name property not found. SCCM Client may not be installed." ) | Out-Null
+try {
+    $mp = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Authority -ErrorAction Stop
+    if ( $mp.Name ) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Site found: $( $MP.Name )" ) | Out-Null
+    } else {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.Name property not found. SCCM Client may not be installed." ) | Out-Null
+        $corruption = "Site Code not found."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Authority: $_" ) | Out-Null
     $corruption = "Site Code not found."
 }
 
 # Check Client ID
-$ccmClient = Get-WmiObject -Namespace "root\ccm" -Class CCM_Client -ErrorAction SilentlyContinue
-if ( $ccmClient.ClientId ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Client ID found: $( $ccmClient.ClientId )" ) | Out-Null
-} else {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCM_Client.ClientId property not found. SCCM Client may not be installed." ) | Out-Null
+try {
+    $ccmClient = Get-CimInstance -Namespace "root\ccm" -ClassName CCM_Client -ErrorAction Stop
+    if ( $ccmClient.ClientId ) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Client ID found: $( $ccmClient.ClientId )" ) | Out-Null
+    } else {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCM_Client.ClientId property not found. SCCM Client may not be installed." ) | Out-Null
+        $corruption = "Client ID not found."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_Client: $_" ) | Out-Null
     $corruption = "Client ID not found."
 }   
     
 # Check Management Point Communication
-$mp = Get-WmiObject -Namespace "root\ccm" -Class SMS_Authority -ErrorAction SilentlyContinue
-if ( $mp.CurrentManagementPoint ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Management Point found: $( $mp.CurrentManagementPoint )" ) | Out-Null
-} else {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.CurrentManagementPoint property not found. SCCM Client may not be installed." ) | Out-Null
+try {
+    $mp = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Authority -ErrorAction Stop
+    if ( $mp.CurrentManagementPoint ) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Management Point found: $( $mp.CurrentManagementPoint )" ) | Out-Null
+    } else {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.CurrentManagementPoint property not found. SCCM Client may not be installed." ) | Out-Null
+        $corruption = "Failed to contact MP."
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Management Point: $_" ) | Out-Null
     $corruption = "Failed to contact MP."
 }
 
@@ -90,38 +117,60 @@ if ( -not ( Test-Path $ccmEvalLogPath )) {
 }
 
 # Get the current date and calculate the date a week ago
-$lastWeekDate = $( Get-Date ).AddDays( -7 )
+$lastWeekDate = (Get-Date).AddDays(-7)
 
-# Regex pattern to match log entries with dates
-$pattern = '<time=".*?" date="(\d{2})-(\d{2})-(\d{4})"'
-
-# Read the log file and filter logs from the last week
-$filteredLogs = Get-Content $ccmEvalLogPath -Raw | Where-Object {
-    if ( $_ -match $pattern ) {
-        $logDate = Get-Date "$( $matches[1] )/$( $matches[2] )/$( $matches[3] )" -Format "MM/dd/yyyy"
-        [datetime]$logDate -ge $lastWeekDate
+# Improved log parsing with better error handling
+try {
+    if (Test-Path $ccmEvalLogPath) {
+        # Read the log file with better encoding handling
+        $logContent = Get-Content $ccmEvalLogPath -Raw -Encoding UTF8 -ErrorAction Stop
+        
+        # Split into individual log entries
+        $logEntries = $logContent -split '<!\[LOG\['
+        
+        # Filter logs from the last week with improved date parsing
+        $recentLogs = $logEntries | Where-Object {
+            if ($_ -match '<time="[^"]*"\s+date="(\d{2})-(\d{2})-(\d{4})"') {
+                try {
+                    $logDate = Get-Date "$($matches[2])/$($matches[1])/$($matches[3])" -ErrorAction Stop
+                    return $logDate -ge $lastWeekDate
+                } catch {
+                    # If date parsing fails, include the entry to be safe
+                    return $true
+                }
+            }
+            return $false
+        }
+        
+        # Search for error patterns in recent logs
+        $errorPatterns = @(
+            "Failed to",
+            "Unable to", 
+            "WMI.*corrupt",
+            "CcmExec.*not running",
+            "Remediation failed",
+            "Client is not healthy",
+            "Required service.*not running",
+            "Firewall exception",
+            "Exit code: [1-9]",
+            "Error code",
+            "check: FAILED",
+            "Failed to connect",
+            "Failed to get"
+        )
+        
+        $ccmEvalResults = $recentLogs | Select-String -Pattern ($errorPatterns -join '|') -CaseSensitive:$false
+    } else {
+        $ccmEvalResults = $null
     }
+} catch {
+    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error reading CCMEval log: $_") | Out-Null
+    $ccmEvalResults = $null
 }
-
-# Searches filtered logs (last week) for various strings that would point to a likely corrupt client.
-$ccmEvalResults = $filteredLogs -split '<!' | Select-String -CaseSensitive:$false -Pattern `
-    "Failed to", `
-    "Unable to", `
-    "WMI.*corrupt", `
-    "CcmExec.*not running", `
-    "Remediation failed", `
-    "Client is not healthy", `
-    "Required service.*not running", `
-    "Firewall exception", `
-    "Exit code: [1-9]", `
-    "Error code", `
-    "check: FAILED", `
-    "Failed to connect", `
-    "Failed to get"
 
 if ( $ccmEvalResults ) {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client health check failed per CCMEval logs." ) | Out-Null
-    $mostRecentFail = "$( $ccmEvalResults | select -last 1 )."
+    $mostRecentFail = "$( $ccmEvalResults | Select-Object -Last 1 )."
     if ($mostRecentFail -match 'LOG\[(.*?)\]LOG') {
         $failMsg = $matches[1]
     }

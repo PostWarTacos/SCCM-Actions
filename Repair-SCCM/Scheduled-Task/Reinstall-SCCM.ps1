@@ -1,12 +1,109 @@
+function Get-UserInputWithTimeout {
+    param(
+        [string]$Prompt,
+        [int]$TimeoutSeconds = 10,
+        [string[]]$ValidValues = @()
+    )
+    
+    Write-Host "$Prompt" -ForegroundColor Yellow
+    Write-Host "Script will exit if no input provided within $TimeoutSeconds seconds" -ForegroundColor Red
+    
+    $job = Start-Job -ScriptBlock {
+        param($Prompt)
+        Read-Host $Prompt
+    } -ArgumentList $Prompt
+    
+    $completed = Wait-Job $job -Timeout $TimeoutSeconds
+    
+    if ($completed) {
+        $result = Receive-Job $job
+        Remove-Job $job
+        
+        # If no input provided (empty string or null), exit script
+        if ([string]::IsNullOrWhiteSpace($result)) {
+            Write-Host "No input provided. Exiting script." -ForegroundColor Red
+            exit 1
+        }
+        
+        # Validate against allowed values if provided
+        if ($ValidValues.Count -gt 0 -and $result.ToUpper().Trim() -notin $ValidValues) {
+            Write-Host "Invalid input: $result" -ForegroundColor Red
+            return $null  # Invalid input - allows retry
+        }
+        
+        return $result.ToUpper().Trim()
+    } else {
+        Stop-Job $job
+        Remove-Job $job
+        Write-Host "Timeout reached. No input provided. Exiting script." -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Get-SiteCode{
-    $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
-    if ( $domain -match "DDS" ) {
-        $code = "DDS"
+    try {
+        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().Name
+        if ( $domain -match "DDS" ) {
+            $code = "DDS"
+        }
+        elseif ( $domain -match "DPOS" -or $domain -match "PCI" ) {
+            $code = "PCI"
+        }
+        else {
+            # Unknown domain - prompt for input with timeout
+            Write-Warning "Unknown domain detected: $domain"
+            Write-Host "Unable to automatically determine SCCM site code." -ForegroundColor Yellow
+            Write-Host "Known site codes:" -ForegroundColor Cyan
+            Write-Host "  - DDS (for DDS domains)" -ForegroundColor White
+            Write-Host "  - PCI (for DPOS domains)" -ForegroundColor White
+            
+            do {
+                $code = Get-UserInputWithTimeout -Prompt "Please enter the correct site code (DDS or PCI)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
+                
+                if ($null -eq $code) {
+                    Write-Host "Invalid site code. Please enter 'DDS' or 'PCI'." -ForegroundColor Red
+                    continue
+                }
+                
+                # Convert DPOS to PCI for consistency
+                if ($code -eq "DPOS") {
+                    $code = "PCI"
+                }
+                
+                break
+            } while ($true)
+            
+            Write-Host "Using site code: $code" -ForegroundColor Green
+        }
+        return $code
     }
-    elseif ( $domain -match "DPOS" ) {
-        $code = "PCI"
+    catch {
+        # Failed to get domain information - prompt for input
+        Write-Error "Failed to get domain information: $_"
+        Write-Host "Unable to automatically determine SCCM site code." -ForegroundColor Yellow
+        Write-Host "Known site codes:" -ForegroundColor Cyan
+        Write-Host "  - DDS (for DDS domains)" -ForegroundColor White
+        Write-Host "  - PCI (for DPOS domains)" -ForegroundColor White
+        
+        do {
+            $code = Get-UserInputWithTimeout -Prompt "Please enter the correct site code (DDS or PCI)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
+            
+            if ($null -eq $code) {
+                Write-Host "Invalid site code. Please enter 'DDS' or 'PCI'." -ForegroundColor Red
+                continue
+            }
+            
+            # Convert DPOS to PCI for consistency
+            if ($code -eq "DPOS") {
+                $code = "PCI"
+            }
+            
+            break
+        } while ($true)
+        
+        Write-Host "Using site code: $code" -ForegroundColor Green
+        return $code
     }
-    return $code
 }
 
 function Update-HealthLog {
@@ -22,10 +119,7 @@ function Update-HealthLog {
         [switch]$WriteHost,
 
         [Parameter()]
-        [string]$Color,
-
-        [Parameter()]
-        [switch]$Return
+        [string]$Color
     )
 
     $healthLog.Add("[$(Get-Date -Format 'dd-MMM-yy HH:mm:ss')] Message: $message") | Out-Null
@@ -33,16 +127,12 @@ function Update-HealthLog {
     if ( $PSBoundParameters.ContainsKey('WriteHost') -and $PSBoundParameters.ContainsKey('Color') ) {
         Write-Host $message -ForegroundColor $Color
     }
-    else {
+    elseif ( $PSBoundParameters.ContainsKey('WriteHost') ) {
         Write-Host $Message
-    }
-
-    if ($PSBoundParameters.ContainsKey('Return')) {
-        $null = return $message | Out-Null
     }
 }
 
-function Run-HealthCheck {
+function Test-HealthCheck {
 
     $allPassed = $true
 
@@ -130,7 +220,7 @@ try {
         $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -PassThru
     }
     # DPOS
-    elseif ( $sitecode -eq "PCI" ) {
+    elseif ( $siteCode -eq "PCI" ) {
         $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$siteCode" -PassThru -Verbose    
     }
        
@@ -139,7 +229,7 @@ try {
         throw "SCCM install failed with exit code $($proc.exitcode)"
     }
     $message = "Reinstall complete."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Cyan -return
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Cyan
     $message = "Waiting for service to be installed."
     Update-HealthLog -path $healthLogPath -message $message -WriteHost
     while ( -not ( Get-Service "ccmexec" -ErrorAction SilentlyContinue )) {
@@ -153,7 +243,7 @@ try {
 }
 Catch{
     $message = "Install failed. Caught error: $_"
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
     return $_
 }
 
@@ -170,7 +260,7 @@ Start-Sleep -Seconds 60
 for ( $i = 1; $i -le $maxAttempts; $i++ ) {
     Write-Host "---- Health Check Attempt $i ----" -ForegroundColor Cyan
 
-    if ( Run-HealthCheck ) {
+    if ( Test-HealthCheck ) {
         Write-Host "All SCCM health checks passed!" -ForegroundColor Green
         $success = $true
         break

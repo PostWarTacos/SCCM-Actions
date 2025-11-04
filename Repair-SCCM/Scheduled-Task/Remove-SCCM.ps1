@@ -1,5 +1,47 @@
 # ------------------- FUNCTIONS -------------------- #
 
+function Get-UserInputWithTimeout {
+    param(
+        [string]$Prompt,
+        [int]$TimeoutSeconds = 10,
+        [string[]]$ValidValues = @()
+    )
+    
+    Write-Host "$Prompt" -ForegroundColor Yellow
+    Write-Host "Script will exit if no input provided within $TimeoutSeconds seconds" -ForegroundColor Red
+    
+    $job = Start-Job -ScriptBlock {
+        param($Prompt)
+        Read-Host $Prompt
+    } -ArgumentList $Prompt
+    
+    $completed = Wait-Job $job -Timeout $TimeoutSeconds
+    
+    if ($completed) {
+        $result = Receive-Job $job
+        Remove-Job $job
+        
+        # If no input provided (empty string or null), exit script
+        if ([string]::IsNullOrWhiteSpace($result)) {
+            Write-Host "No input provided. Exiting script." -ForegroundColor Red
+            exit 1
+        }
+        
+        # Validate against allowed values if provided
+        if ($ValidValues.Count -gt 0 -and $result.ToUpper().Trim() -notin $ValidValues) {
+            Write-Host "Invalid input: $result" -ForegroundColor Red
+            return $null  # Invalid input - allows retry
+        }
+        
+        return $result.ToUpper().Trim()
+    } else {
+        Stop-Job $job
+        Remove-Job $job
+        Write-Host "Timeout reached. No input provided. Exiting script." -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Stop-ServiceWithTimeout {
     param (
         [Parameter(Mandatory=$true)]
@@ -59,10 +101,7 @@ function Update-HealthLog {
         [switch]$WriteHost,
 
         [Parameter()]
-        [string]$Color,
-
-        [Parameter()]
-        [switch]$Return
+        [string]$Color
     )
 
     $healthLog.Add("[$(Get-Date -Format 'dd-MMM-yy HH:mm:ss')] Message: $message") | Out-Null
@@ -70,12 +109,8 @@ function Update-HealthLog {
     if ( $PSBoundParameters.ContainsKey('WriteHost') -and $PSBoundParameters.ContainsKey('Color') ) {
         Write-Host $message -ForegroundColor $Color
     }
-    else {
+    elseif ( $PSBoundParameters.ContainsKey('WriteHost') ) {
         Write-Host $Message
-    }
-
-    if ($PSBoundParameters.ContainsKey('Return')) {
-        $null = return $message | Out-Null
     }
 }
 
@@ -123,7 +158,7 @@ if ( $found ){
         Start-Sleep -Seconds 10 # Allow some time for the service to start
     
         # Attempt to contact MP and pull new policy. If this works, client should be healthy.
-        Invoke-WmiMethod -Namespace "root\ccm" -Class "SMS_Client" -Name "TriggerSchedule" -ArgumentList "{00000000-0000-0000-0000-000000000021}" | Out-Null
+        Invoke-CimMethod -Namespace "root\ccm" -ClassName "SMS_Client" -MethodName "TriggerSchedule" -Arguments @{sScheduleID="{00000000-0000-0000-0000-000000000021}"} | Out-Null
         $policyAgentLogs = "C:\Windows\CCM\Logs\PolicyAgent.log"
         $recentLogs = Get-Content $policyAgentLogs -Tail 50
         $patterns = @(
@@ -142,12 +177,12 @@ if ( $found ){
             return 102
         } else {
             $message = "Failed to start service. Continuing with SCCM Client removal and reinstall."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
         }   
     }
     catch {
            $message = "Failed to start service. Continuing with SCCM Client removal and reinstall."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
     }
 } Else {
     $message = "CcmExec Service not installed. Continuing with SCCM Client removal and reinstall."
@@ -170,7 +205,7 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
     }
     catch {
         $message = "Failed to uninstall ccm. Ending script. Caught error: $_"
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
         return $_
     }
 } else {
@@ -188,13 +223,13 @@ foreach ( $service in $services ){
     if ( get-service $service -ErrorAction SilentlyContinue ){
         try {
             Stop-ServiceWithTimeout $service
-            sc delete $service -Force -ErrorAction SilentlyContinue
+            & sc.exe delete $service
             $message = "$service service found and removed."
             Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green   
         }
         catch {
             $message = "Failed to stop and remove $service service. Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
             $errorCount++
         }
     } else{
@@ -212,20 +247,29 @@ $files = @(
     "C:\Windows\SMSCFG.ini"
 )
 foreach ( $file in $files ){
-    $proc = Get-Process | Where-Object { $_.modules.filename -like "$file*" }
-    if ($proc){
-        try {
-            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
-            $message = "$($proc.name) killed. Process was tied to $file."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green    
+    try {
+        $proc = Get-Process | Where-Object { 
+            $_.ProcessName -like "*ccm*" -or 
+            ($_.Modules -and $_.Modules.FileName -like "$file*") 
+        } -ErrorAction SilentlyContinue
+        
+        if ($proc){
+            try {
+                Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
+                $message = "$($proc.ProcessName) killed. Process was tied to $file."
+                Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green    
+            }
+            catch {
+                $message = "Failed to kill $($proc.ProcessName) process. Continuing script but may cause issues."
+                Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+                $errorCount++
+            }
+        } else{
+            $message = "Could not find a process tied to $file."
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
         }
-        catch {
-            $message = "Failed to kill $proc process. Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
-            $errorCount++
-        }
-    } Else{
-        $message = "Could not find a process tied to $file."
+    } catch {
+        $message = "Error checking processes for $file. Continuing script."
         Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
     }
 }
@@ -243,7 +287,7 @@ foreach ( $file in $files ){
         }
         catch {
             $message = "Failed to remove $file file(s). Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
             $errorCount++
         }
     } else{
@@ -253,7 +297,7 @@ foreach ( $file in $files ){
 }
 
 # Delete the main registry keys associated with SCCM
-Write-Host "(Step 6 of 9) Deletinag all SCCM reg keys." -ForegroundColor Cyan
+Write-Host "(Step 6 of 9) Deleting all SCCM reg keys." -ForegroundColor Cyan
 $keys= @(
     "HKLM:\Software\Microsoft\CCM",
     "HKLM:\Software\Microsoft\SMS",
@@ -276,7 +320,7 @@ foreach ( $key in $keys ){
         }
         catch {
             $message = "Failed to remove $key reg key. Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
             $errorCount++
         }
     } Else { 
@@ -297,23 +341,83 @@ try {
 }
 catch {
     $message = "Failed to remove namespace(s). Continuing script but may cause issues."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red -return
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
     $errorCount++
 }
 
 # Download required files before reboot
 Write-Host "(Step 8 of 9) Downloading SCCM installation files." -ForegroundColor Cyan
 try {
-    # Determine domain and set appropriate source path
-    $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
-    if ( $domain -match "DDS" ) {
-        $cpSource = "\\scanz223\SMS_DDS\Client" # DDS
+    # Determine domain and set appropriate source path using improved detection
+    try {
+        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().Name
+        if ( $domain -match "DDS" ) {
+            $cpSource = "\\scanz223\SMS_DDS\Client" # DDS
+        }
+        elseif ( $domain -match "DPOS" ) {
+            $cpSource = "\\slrcp223\SMS_PCI\Client" # PCI
+        }
+        else {
+            # Unknown domain - prompt for input with timeout
+            Write-Warning "Unknown domain detected: $domain"
+            Write-Host "Unable to automatically determine SCCM source path." -ForegroundColor Yellow
+            Write-Host "Known domains and their source paths:" -ForegroundColor Cyan
+            Write-Host "  - DDS domains: \\scanz223\SMS_DDS\Client" -ForegroundColor White
+            Write-Host "  - DPOS domains: \\slrcp223\SMS_PCI\Client" -ForegroundColor White
+            
+            do {
+                $domainChoice = Get-UserInputWithTimeout -Prompt "Please enter the domain type (DDS, PCI, or DPOS)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
+                
+                if ($null -eq $domainChoice) {
+                    Write-Host "Invalid choice. Please enter 'DDS', 'PCI', or 'DPOS'." -ForegroundColor Red
+                    continue
+                }
+                
+                break
+            } while ($true)
+            
+            if ($domainChoice -eq "DDS") {
+                $cpSource = "\\scanz223\SMS_DDS\Client"
+            }
+            elseif ($domainChoice -eq "PCI" -or $domainChoice -eq "DPOS") {
+                $cpSource = "\\slrcp223\SMS_PCI\Client"
+            }
+            
+            Write-Host "Using source path: $cpSource" -ForegroundColor Green
+                    break
+                }
+            } while ($true)
+            
+            Write-Host "Using source path: $cpSource" -ForegroundColor Green
+        }
     }
-    elseif ( $domain -match "DPOS" ) {
-        $cpSource = "\\slrcp223\SMS_PCI\Client" # PCI
-    }
-    else {
-        throw "Unknown domain detected. Cannot determine SCCM source path."
+    catch {
+        # Failed to get domain information - prompt for input
+        Write-Error "Failed to get domain information: $_"
+        Write-Host "Unable to automatically determine SCCM source path." -ForegroundColor Yellow
+        Write-Host "Known domains and their source paths:" -ForegroundColor Cyan
+        Write-Host "  - DDS domains: \\scanz223\SMS_DDS\Client" -ForegroundColor White
+        Write-Host "  - DPOS domains: \\slrcp223\SMS_PCI\Client" -ForegroundColor White
+        
+        do {
+            $domainChoice = Get-UserInputWithTimeout -Prompt "Please enter the domain type (DDS, PCI, or DPOS)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
+            
+            if ($null -eq $domainChoice) {
+                Write-Host "Invalid choice. Please enter 'DDS', 'PCI', or 'DPOS'." -ForegroundColor Red
+                continue
+            }
+            
+            if ($domainChoice -eq "DDS") {
+                $cpSource = "\\scanz223\SMS_DDS\Client"
+                break
+            }
+            elseif ($domainChoice -eq "PCI" -or $domainChoice -eq "DPOS") {
+                $cpSource = "\\slrcp223\SMS_PCI\Client"
+                break
+            }
+        } while ($true)
+        
+        Write-Host "Using source path: $cpSource" -ForegroundColor Green
     }
 
     # Set destination path
