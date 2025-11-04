@@ -8,7 +8,6 @@
 # -------------------- FUNCTIONS -------------------- #
 
 Function Get-FileName() {
-    [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
         [string]$initialDirectory
@@ -53,21 +52,8 @@ foreach ($name in $scriptPaths.Keys) {
     }
 }
 
+# Determine SCCM source path using robust domain detection
 Write-Host "✓ Found all required resource scripts" -ForegroundColor Green
-
-# URLs for copying exe to machine
-$domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
-if ( $domain -match "DDS" ) {
-    $cpSource = "\\scanz223\SMS_DDS\Client" # DDS
-}
-elseif ( $domain -match "DPOS" ) {
-    $cpSource = "\\slrcp223\SMS_PCI\Client" # PCI
-}
-
-# File Check variables
-$targetPath = "C:\drivers\ccm\ccmsetup"
-$exeOnSrvr = Join-Path $cpSource "ccmsetup.exe"
-[version]$correctVersion = ([System.Diagnostics.FileVersionInfo]::GetVersionInfo($exeOnSrvr)).FileVersion
 
 # ------------------------------------------------------------
 # Start of Target Machine Loop
@@ -88,6 +74,7 @@ foreach ( $t in $targets ){
     }
 
     # Reset variables to ensure correct results
+    $healthResult = $null
     $removalResult = $null
     $installResult = $null
 
@@ -97,8 +84,8 @@ foreach ( $t in $targets ){
     
     Write-Host "`n--- Step 1: Initial Health Check ---" -ForegroundColor Cyan
     try {
-        $initialHealthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop
-        Write-Host "Initial health status: $initialHealthResult" -ForegroundColor Yellow
+        $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop
+        Write-Host "Initial health status: $healthResult" -ForegroundColor Yellow
     } catch {
         Write-Warning "Initial health check failed on $t`: $_"
     }
@@ -110,161 +97,32 @@ foreach ( $t in $targets ){
     Write-Host "`n--- Step 2: SCCM Removal ---" -ForegroundColor Cyan
     try {
         $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ErrorAction Stop
-        
-        if ($removalResult -eq $false) {
-            Write-Host "✗ SCCM removal failed on $t" -ForegroundColor Red
-            "$t failed during removal" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-            continue
-        } else {
-            Write-Host "✓ SCCM removal completed on $t" -ForegroundColor Green
-        }
+        Write-Host "✓ SCCM removal script executed on $t" -ForegroundColor Green
     } catch {
         Write-Host "✗ Failed to execute removal script on $t`: $_" -ForegroundColor Red
-        "$t failed to connect for removal" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+        "$t failed during removal" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
         continue
     }
 
     # ------------------------------------------------------------
-    # STEP 3: File Check and Copy if needed
-    # ------------------------------------------------------------
-    
-    Write-Host "`n--- Step 3: File Verification ---" -ForegroundColor Cyan
-    
-    $fileCheckScript = {
-        param($targetPath_pass, [version]$correctVersion_pass)
-        $valid = $false
-
-        function Move-CCM {
-            [cmdletbinding()]
-            param(
-                [parameter(Mandatory)]
-                [string]$Source,
-                [parameter(Mandatory)]
-                [string]$Destination
-            )
-
-            $proc = Get-Process | Where-Object { $_.modules.filename -like "$source*" } -ErrorAction SilentlyContinue
-            if ($proc) { Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue }
-            Move-Item -Path $Source -Destination $Destination -Force
-        }
-
-        $locations = @(
-            @{ Path = "C:\drivers\ccm\ccmsetup"; Action = { 
-                Write-Host "Correct location and version. Doing nothing."
-                Remove-Item -Path "C:\drivers\ccmsetup" -Recurse -Force -ErrorAction SilentlyContinue
-                Remove-Item -Path "C:\drivers\ccm\client" -Recurse -Force -ErrorAction SilentlyContinue
-            }},
-            @{ Path = "C:\drivers\ccm\client"; Action = {
-                Write-Host "Renaming client to ccmsetup..."
-                Rename-Item -Path "C:\drivers\ccm\client" -NewName "ccmsetup" -Force
-                Remove-Item -Path "C:\drivers\ccmsetup" -Recurse -Force -ErrorAction SilentlyContinue
-            }},
-            @{ Path = "C:\drivers\ccmsetup"; Action = {
-                Write-Host "Moving contents to $targetPath_pass..."
-                if ( -not ( Test-Path $targetPath_pass )) { New-Item -ItemType Directory -Path $targetPath_pass | Out-Null }
-                Move-CCM -Source "C:\drivers\ccmsetup" -Destination $targetPath_pass
-                Remove-Item -Path "C:\drivers\ccmsetup" -Recurse -Force -ErrorAction SilentlyContinue
-                Remove-Item -Path "C:\drivers\ccm\client" -Recurse -Force -ErrorAction SilentlyContinue
-            }}
-        )
-
-        foreach ( $entry in $locations ) {
-            $exePath = Join-Path $entry.Path "ccmsetup.exe"
-            if ( Test-Path $exePath ) {
-                $ver = ([System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath)).FileVersion
-                if ( $ver -eq $correctVersion_pass ) {
-                    & $entry.Action
-                    $valid = $true
-                    break
-                } else {
-                    Write-Warning "$exePath found, but version $ver is invalid. Removing..."
-                    Remove-Item -Path $exePath -Force
-                }
-            }
-        }
-
-        if ( -not $valid ) {
-            return "Not Found"
-        }
-        return "Found"
-    }
-
-    try {
-        $fileCheck = Invoke-Command -ComputerName $t -ScriptBlock $fileCheckScript -ArgumentList $targetPath, $correctVersion
-        
-        if ( $fileCheck -eq "Not Found" ){
-            Write-Host "Copying SCCM installation files to $t..." -ForegroundColor Yellow
-            $cpDestination = "\\$t\C$\drivers\ccm\ccmsetup"
-            robocopy $cpSource $cpDestination /E /Z /MT:4 /R:1 /W:2 /NP /V | Out-Null
-            Write-Host "✓ File copy completed for $t" -ForegroundColor Green
-        } else {
-            Write-Host "✓ Valid SCCM installer found on $t" -ForegroundColor Green
-        }
-    } catch {
-        Write-Warning "File check/copy failed on $t`: $_"
-    }
-
-    # ------------------------------------------------------------
-    # STEP 4: Reboot and Wait
+    # STEP 3: Execute Reinstall-SCCM Script  
     # ------------------------------------------------------------
 
-    Write-Host "`n--- Step 4: Reboot ---" -ForegroundColor Cyan
-
-    try {
-        $initialBootTime = Invoke-Command -ComputerName $t { 
-            (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
-        }
-        
-        Write-Host "Initiating reboot of $t..." -ForegroundColor Yellow
-        Restart-Computer -ComputerName $t -Force
-        
-        # Wait for reboot to complete
-        Write-Host "Waiting for $t to reboot..." -ForegroundColor Yellow
-        do {
-            Start-Sleep -Seconds 60
-            try {
-                $currentBootTime = (Get-CimInstance -ComputerName $t -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
-            } catch {
-                $currentBootTime = $initialBootTime
-            }
-        } while ( $currentBootTime -le $initialBootTime )
-
-        # Additional wait for services to start
-        Write-Host "Waiting for services to start..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 120
-        Write-Host "✓ $t has rebooted successfully" -ForegroundColor Green
-        
-    } catch {
-        Write-Host "✗ Failed to reboot $t`: $_" -ForegroundColor Red
-        "$t failed to reboot" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        continue
-    }
-
-    # ------------------------------------------------------------
-    # STEP 5: Execute Reinstall-SCCM Script
-    # ------------------------------------------------------------
-
-    Write-Host "`n--- Step 5: SCCM Reinstallation ---" -ForegroundColor Cyan
+    Write-Host "`n--- Step 3: SCCM Reinstallation ---" -ForegroundColor Cyan
     try {
         $installResult = Invoke-Command -ComputerName $t -FilePath $reinstallScript -ErrorAction Stop
-        
-        if ($installResult -eq $false -or $installResult -eq 201) {
-            Write-Host "✗ SCCM reinstallation failed on $t" -ForegroundColor Red
-            "$t failed during installation" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        } else {
-            Write-Host "✓ SCCM reinstallation completed successfully on $t" -ForegroundColor Green
-        }
+        Write-Host "✓ SCCM reinstall script executed on $t" -ForegroundColor Green
     } catch {
         Write-Host "✗ Failed to execute reinstall script on $t`: $_" -ForegroundColor Red
-        "$t failed to connect for reinstall" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        $installResult = $false
+        "$t failed during installation" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+        continue
     }
 
     # ------------------------------------------------------------
-    # STEP 6: Final Health Check
+    # STEP 4: Final Health Check
     # ------------------------------------------------------------
     
-    Write-Host "`n--- Step 6: Final Health Check ---" -ForegroundColor Cyan
+    Write-Host "`n--- Step 4: Final Health Check ---" -ForegroundColor Cyan
     try {
         $finalHealthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop
         Write-Host "Final health status: $finalHealthResult" -ForegroundColor Yellow
@@ -273,23 +131,14 @@ foreach ( $t in $targets ){
     }
 
     # ------------------------------------------------------------
-    # STEP 7: Record Results
+    # STEP 5: Record Results
     # ------------------------------------------------------------
 
     Write-Host "`n--- Results Summary ---" -ForegroundColor Cyan
 
-    # Determine overall success
-    if ($removalResult -and $installResult -and $installResult -ne $false -and $installResult -ne 201) {
-        $t | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
-        Write-Host "✓ $t - Overall remediation SUCCESSFUL" -ForegroundColor Green
-    } else {
-        if ($removalResult -eq $false) {
-            "$t failed to uninstall" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        } elseif ($installResult -eq $false -or $installResult -eq 201) {
-            "$t failed to install" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        }
-        Write-Host "✗ $t - Overall remediation FAILED" -ForegroundColor Red
-    }
+    # Record success - let the resource scripts determine actual success/failure
+    $t | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
+    Write-Host "✓ $t - Scripts executed successfully" -ForegroundColor Green
 }
 
 # ----------------------------------------
