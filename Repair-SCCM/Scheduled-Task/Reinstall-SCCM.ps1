@@ -212,7 +212,7 @@ $siteCode = Get-SiteCode
 
 # -------------------- Reinstall SCCM -------------------- #
 
-Write-Host "(Step 7 of 8) Attempting reinstall." -ForegroundColor Cyan
+Write-Host "(Step 1 of 3) Attempting reinstall." -ForegroundColor Cyan
 try {
     # DDS
     if ( $siteCode -eq "DDS") {
@@ -250,11 +250,12 @@ Catch{
 # -------------------- REGISTER AND RUN CCMEVAL CHECK -------------------- #
 
 # CCMEval.exe actions
-Write-Host "(Step 8 of 8) Registering CcmEval. Running CcmEval check." -ForegroundColor Cyan
+Write-Host "(Step 2 of 3) Registering CcmEval. Running CcmEval check." -ForegroundColor Cyan
 C:\windows\ccm\CcmEval.exe /register
 C:\windows\ccm\CcmEval.exe /run
 
 # -------------------- RUN UNTIL ALL PASS OR TIMEOUT -------------------- #
+Write-Host "(Step 3 of 3) Running custom health checks." -ForegroundColor Cyan
 Write-Host "Pausing for 60 seconds before verifying client is operating correctly."
 Start-Sleep -Seconds 60
 for ( $i = 1; $i -le $maxAttempts; $i++ ) {
