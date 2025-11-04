@@ -353,7 +353,7 @@ foreach ( $t in $targets ){
     } 
 
     # ------------------------------------------------------------
-    # End of Uninstall and Remove invoke-command
+    # End of "Uninstall and Remove" invoke-command
     # ------------------------------------------------------------
 
     if ( $removalResult -eq $false ){
@@ -439,7 +439,7 @@ foreach ( $t in $targets ){
     }
 
     # ----------------------------------------
-    # End of File Check invoke-command
+    # End of "File Check" invoke-command
     # ----------------------------------------
 
     # Copies files from server if needed  
