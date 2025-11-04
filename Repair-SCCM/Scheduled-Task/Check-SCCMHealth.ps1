@@ -145,7 +145,7 @@ if ( -not ( $corruption )){
     else {
         $results = "Corrupt Client. $corruption"
     }
-    Start-ScheduledTask "Repair-SCCMTask" # Comment this line for JUST a health check through CC.
+    Start-ScheduledTask "Remove-SCCMTask" # Triggers Remove-SCCM task when health check fails.
 }
 
 if ( -not ( Test-Path $healthLogPath )){

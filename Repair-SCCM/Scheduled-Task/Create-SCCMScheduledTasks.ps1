@@ -57,7 +57,7 @@ else{
     $dayOfTheWeek = "Thursday" # ODD
 }
 
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $dayOfTheWeek -At 5am
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $dayOfTheWeek -At 4am
 $settings = New-ScheduledTaskSettingsSet -WakeToRun
 $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount
 
@@ -84,24 +84,46 @@ if(Get-ScheduledTask -TaskName Check-SCCMHealthTask){
 }
 return $result
 
+#=============================
+# Create Remove-SCCM Task
+#=============================
+$action = New-ScheduledTaskAction -Execute "powershell.exe"
+    -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedRemove"
+
+$desc = " This task will only run when manually triggered. When run, it will execute a script that removes the SCCM client from the machine."
+
+Register-ScheduledTask -TaskName "Remove-SCCMTask"
+                       -Action $action
+                       -Trigger $trigger
+                       -settings $settings
+                       -Principal $principal
+                       -Description $desc
+
+if(Get-ScheduledTask -TaskName Remove-SCCMTask){
+    $result = "Created Remove-SCCM task"
+} else{
+    $result = "Failed to create Remove-SCCM task"
+}
+return $result
+
 #========================
-# Create Repair-SCCM Task
+# Create Reinstall-SCCM Task
 #========================
 $action = New-ScheduledTaskAction -Execute "powershell.exe"
     -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedRepair"
 
-$desc = "Will create a scheduled task to run only when triggered. When triggered, will call a script that will repair SCCM client on machine."
+$desc = "Will create a scheduled task to run only when triggered. When triggered, will call a script that will reinstall SCCM client on machine."
 
 
-Register-ScheduledTask -TaskName "Repair-SCCMTask"
+Register-ScheduledTask -TaskName "Reinstall-SCCMTask"
                         -Action $action
                         -settings $settings
                         -Principal $principal
                         -Description $desc
 
-if(Get-ScheduledTask -TaskName Repair-SCCMTask){
-    $result = "Created Repair-SCCM task"
+if(Get-ScheduledTask -TaskName Reinstall-SCCMTask){
+    $result = "Created Reinstall-SCCM task"
 } else{
-    $result = "Failed to create Repair-SCCM task"
+    $result = "Failed to create Reinstall-SCCM task"
 }
 return $result

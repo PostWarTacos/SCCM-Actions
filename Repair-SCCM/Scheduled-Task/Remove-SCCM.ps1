@@ -110,7 +110,7 @@ Update-HealthLog -path $healthLogPath -Message $message -WriteHost -Color Cyan
 # Remove certs and restart service
 # Possible this is the only needed fix.
 # Run this first step and then test if it worked before 
-Write-Host "(Step 1 of 8) Stopping CcmExec to remove SMS certs." -ForegroundColor Cyan
+Write-Host "(Step 1 of 9) Stopping CcmExec to remove SMS certs." -ForegroundColor Cyan
 $found = Get-Service CcmExec -ErrorAction SilentlyContinue
 if ( $found ){
     try {
@@ -155,7 +155,7 @@ if ( $found ){
 }
 
 # Clean uninstall
-Write-Host "(Step 2 of 8) Performing SCCM uninstall." -ForegroundColor Cyan
+Write-Host "(Step 2 of 9) Performing SCCM uninstall." -ForegroundColor Cyan
 if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
     try {
         Get-Service -Name CcmExec -ErrorAction SilentlyContinue | Stop-Service -Force
@@ -178,8 +178,8 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
     Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
 }
 
-# Remove both services â€œccmsetupâ€ and â€œSMS Agent Hostâ€
-Write-Host "(Step 3 of 8) Stopping and removing CcmExec and CcmSetup services." -ForegroundColor Cyan
+# Remove both services “ccmsetup” and “SMS Agent Host”
+Write-Host "(Step 3 of 9) Stopping and removing CcmExec and CcmSetup services." -ForegroundColor Cyan
 $services = @(
     "ccmexec",
     "ccmsetup"
@@ -204,7 +204,7 @@ foreach ( $service in $services ){
 }
 
 # Kill all SCCM client processes
-Write-Host "(Step 4 of 8) Killing all tasks related to SCCM." -ForegroundColor Cyan
+Write-Host "(Step 4 of 9) Killing all tasks related to SCCM." -ForegroundColor Cyan
 $files = @(
     "C:\Windows\CCM",
     "C:\Windows\ccmcache",
@@ -231,7 +231,7 @@ foreach ( $file in $files ){
 }
 
 # Delete the folders for SCCM
-Write-Host "(Step 5 of 8) Deleting all SCCM folders and files." -ForegroundColor Cyan
+Write-Host "(Step 5 of 9) Deleting all SCCM folders and files." -ForegroundColor Cyan
 foreach ( $file in $files ){
     if ( Test-Path $file ){
         try {
@@ -253,7 +253,7 @@ foreach ( $file in $files ){
 }
 
 # Delete the main registry keys associated with SCCM
-Write-Host "(Step 6 of 8) Deletinag all SCCM reg keys." -ForegroundColor Cyan
+Write-Host "(Step 6 of 9) Deletinag all SCCM reg keys." -ForegroundColor Cyan
 $keys= @(
     "HKLM:\Software\Microsoft\CCM",
     "HKLM:\Software\Microsoft\SMS",
@@ -286,7 +286,7 @@ foreach ( $key in $keys ){
 }
 
 # Remove SCCM namespaces from WMI repository
-Write-Host "(Step 7 of 8) Remove SCCM namespaces from WMI repo." -ForegroundColor Cyan
+Write-Host "(Step 7 of 9) Remove SCCM namespaces from WMI repo." -ForegroundColor Cyan
 try {
     Get-CimInstance -Query "Select * From __Namespace Where Name='CCM'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     Get-CimInstance -Query "Select * From __Namespace Where Name='CCMVDI'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
@@ -301,16 +301,88 @@ catch {
     $errorCount++
 }
 
-if ( $errorCount -gt 0 ){
-    $continue = Read-Host "There were $errorCount non-critical errors. Do you wish to continue with the reinstall? There's no guarantee it will succeed. (y/n)"
-    if( $continue -eq "y" ){
-        # Do nothing
+# Download required files before reboot
+Write-Host "(Step 8 of 9) Downloading SCCM installation files." -ForegroundColor Cyan
+try {
+    # Determine domain and set appropriate source path
+    $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+    if ( $domain -match "DDS" ) {
+        $cpSource = "\\scanz223\SMS_DDS\Client" # DDS
     }
-    elseif( $continue -eq "n" ){
-        return 101
+    elseif ( $domain -match "DPOS" ) {
+        $cpSource = "\\slrcp223\SMS_PCI\Client" # PCI
     }
+    else {
+        throw "Unknown domain detected. Cannot determine SCCM source path."
+    }
+
+    # Set destination path
+    $cpDestination = "C:\drivers\ccm\ccmsetup"
+    
+    # Ensure destination directory exists
+    if ( -not ( Test-Path $cpDestination )) {
+        New-Item -ItemType Directory -Path $cpDestination -Force | Out-Null
+    }
+
+    # Download files using robocopy
+    $message = "Copying SCCM installation files from $cpSource to $cpDestination"
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+    
+    $robocopyResult = & robocopy $cpSource $cpDestination /E /Z /MT:4 /R:1 /W:2 /NP /V
+    $robocopyExitCode = $LASTEXITCODE
+    
+    # Robocopy exit codes 0-7 are considered success
+    if ( $robocopyExitCode -le 7 ) {
+        $message = "SCCM installation files downloaded successfully."
+        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+    }
+    else {
+        throw "Robocopy failed with exit code: $robocopyExitCode"
+    }
+
+    # Verify ccmsetup.exe exists
+    $ccmSetupPath = Join-Path $cpDestination "ccmsetup.exe"
+    if ( Test-Path $ccmSetupPath ) {
+        $message = "Verified ccmsetup.exe exists at $ccmSetupPath"
+        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+    }
+    else {
+        throw "ccmsetup.exe not found after download at $ccmSetupPath"
+    }
+}
+catch {
+    $message = "Failed to download SCCM installation files. Error: $_"
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+    $errorCount++
+}
+
+# Add RunOnce registry key to trigger Reinstall-SCCMTask after reboot
+Write-Host "(Step 9 of 9) Adding RunOnce registry key to trigger Reinstall-SCCMTask after reboot." -ForegroundColor Cyan
+try {
+    $runOnceKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+    $taskCommand = "schtasks.exe /run /tn `"Reinstall-SCCMTask`""
+
+    # Create the RunOnce registry entry
+    Set-ItemProperty -Path $runOnceKey -Name "TriggerReinstallSCCMTask" -Value $taskCommand -Force
+
+    $message = "RunOnce registry key created successfully. Reinstall-SCCMTask will be triggered after reboot."
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+}
+catch {
+    $message = "Failed to create RunOnce registry key. Error: $_"
+    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+    $errorCount++
 }
 
 Write-Host "Uninstall and wipe of SCCM completed." -ForegroundColor Green
 
 $healthLog >> $healthLogPath\HealthCheck.txt
+
+if ( $errorCount -gt 0 ){
+    Write-Host "There were $errorCount non-critical errors." -ForegroundColor Yellow
+}
+
+# Reboot the machine to trigger the RunOnce task
+Write-Host "Rebooting machine to trigger Repair-SCCMTask..." -ForegroundColor Yellow
+Start-Sleep -Seconds 3
+Restart-Computer -Force
