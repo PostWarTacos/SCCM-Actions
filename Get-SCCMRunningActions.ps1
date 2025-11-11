@@ -843,7 +843,7 @@ if ($result.InstallingItems.Count -gt 0) {
         $hasInstalling = $true
     }
     
-    $result.InstallingItems | ForEach-Object {
+    $result.InstallingItems | Sort-Object Type, Name | ForEach-Object {
         if ($_.Type -eq "Task Sequence" -and $result.TaskSequenceDetected) {
             # Skip - already shown above
         } else {
@@ -924,7 +924,7 @@ if ($result.AvailableItems.Count -gt 0) {
     
     if ($availableApps.Count -gt 0) {
         Write-Host "    Applications ($($availableApps.Count)):" -ForegroundColor Yellow
-        $availableApps | Select-Object -First 10 | ForEach-Object {
+        $availableApps | Sort-Object Name | Select-Object -First 10 | ForEach-Object {
             Write-Host "      - $($_.Name)" -ForegroundColor White
         }
         if ($availableApps.Count -gt 10) {
@@ -934,7 +934,7 @@ if ($result.AvailableItems.Count -gt 0) {
     
     if ($availableTS.Count -gt 0) {
         Write-Host "    Task Sequences ($($availableTS.Count)):" -ForegroundColor Yellow
-        $availableTS | ForEach-Object {
+        $availableTS | Sort-Object Name | ForEach-Object {
             Write-Host "      - $($_.Name)" -ForegroundColor White
         }
     }
@@ -947,7 +947,7 @@ if ($result.AvailableItems.Count -gt 0) {
 # ========================================
 Write-Host "`n  [FAILED]" -ForegroundColor Red
 if ($result.FailedItems.Count -gt 0) {
-    $result.FailedItems | ForEach-Object {
+    $result.FailedItems | Sort-Object Type, Name | ForEach-Object {
         Write-Host "    $($_.Type): $($_.Name)" -ForegroundColor Yellow
         if ($_.ErrorCode -and $_.ErrorCode -ne 0) {
             Write-Host "      Error Code: $($_.ErrorCode)" -ForegroundColor White
