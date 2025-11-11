@@ -92,6 +92,8 @@ function Get-SCCMApplicationStatus {
                     ErrorCode = $app.ErrorCode
                     LastEvalTime = $app.LastEvalTime
                     Type = "Application"
+                    ApplicationID = $app.Id
+                    Revision = $app.Revision
                 }
                 
                 # Categorize based on state - be more aggressive about detecting failures
@@ -175,6 +177,8 @@ function Get-SCCMApplicationStatus {
                     ErrorCode = $errorCode
                     LastEvalTime = $null
                     Type = "Task Sequence"
+                    AdvertisementID = $ts.ADV_AdvertisementID
+                    PackageID = $ts.PKG_PackageID
                 }
                 
                 if ($tsStatus -eq "Failed") {
@@ -210,6 +214,8 @@ function Get-SCCMApplicationStatus {
                         ErrorCode = if ($tsReq.ProgramExitCode) { $tsReq.ProgramExitCode } else { 1 }
                         LastEvalTime = $tsReq.ReceivedTime
                         Type = "Task Sequence"
+                        AdvertisementID = $tsReq.AdvertID
+                        PackageID = if ($tsPolicy) { $tsPolicy.PKG_PackageID } else { $null }
                     }
                     $appStatus.Failed += $failedItem
                     
@@ -815,12 +821,12 @@ $hasInstalling = $false
 # Check for running task sequence
 if ($result.TaskSequenceDetected) {
     if (-not $hasInstalling) {
-        Write-Host "`n  [INSTALLING]" -ForegroundColor Red
+        Write-Host "`n  [INSTALLING]" -ForegroundColor Blue
         $hasInstalling = $true
     }
     
     $displayName = if ($result.TaskSequenceName) { $result.TaskSequenceName } else { "Unknown Task Sequence" }
-    Write-Host "    Task Sequence: $displayName" -ForegroundColor Yellow
+    Write-Host "    Task Sequence: $displayName" -ForegroundColor Magenta
     if ($result.TaskSequenceStartTime) {
         Write-Host "      Started: $($result.TaskSequenceStartTime)" -ForegroundColor White
     }
@@ -839,7 +845,7 @@ if ($result.TaskSequenceDetected) {
         # Show installing applications
 if ($result.InstallingItems.Count -gt 0) {
     if (-not $hasInstalling) {
-        Write-Host "`n  [INSTALLING]" -ForegroundColor Red
+        Write-Host "`n  [INSTALLING]" -ForegroundColor Blue
         $hasInstalling = $true
     }
     
@@ -847,9 +853,22 @@ if ($result.InstallingItems.Count -gt 0) {
         if ($_.Type -eq "Task Sequence" -and $result.TaskSequenceDetected) {
             # Skip - already shown above
         } else {
-            Write-Host "    $($_.Type): $($_.Name)" -ForegroundColor Yellow
+            Write-Host "    $($_.Type): $($_.Name)" -ForegroundColor Magenta
             if ($_.Version) {
                 Write-Host "      Version: $($_.Version)" -ForegroundColor White
+            }
+            
+            # Show IDs on separate line for installing items
+            $idParts = @()
+            if ($_.Type -eq "Task Sequence") {
+                if ($_.AdvertisementID) { $idParts += "AdvID: $($_.AdvertisementID)" }
+                if ($_.PackageID) { $idParts += "PkgID: $($_.PackageID)" }
+            } elseif ($_.Type -eq "Application") {
+                if ($_.ApplicationID) { $idParts += "AppID: $($_.ApplicationID)" }
+                if ($_.Revision) { $idParts += "Rev: $($_.Revision)" }
+            }
+            if ($idParts.Count -gt 0) {
+                Write-Host "      $($idParts -join ' | ')" -ForegroundColor DarkGray
             }
             
             # Try to find start time from multiple sources
@@ -908,15 +927,17 @@ if ($result.InstallingItems.Count -gt 0) {
             }
         }
     }
-}if (-not $hasInstalling) {
-    Write-Host "`n  [INSTALLING]" -ForegroundColor Green
+}
+
+if (-not $hasInstalling) {
+    Write-Host "`n  [INSTALLING]" -ForegroundColor Blue
     Write-Host "    No installations in progress" -ForegroundColor Gray
 }
 
 # ========================================
 # AVAILABLE SECTION
 # ========================================
-Write-Host "`n  [AVAILABLE]" -ForegroundColor Cyan
+Write-Host "`n  [AVAILABLE]" -ForegroundColor Blue
 if ($result.AvailableItems.Count -gt 0) {
     # Group by type
     $availableApps = $result.AvailableItems | Where-Object { $_.Type -eq "Application" }
@@ -925,7 +946,10 @@ if ($result.AvailableItems.Count -gt 0) {
     if ($availableApps.Count -gt 0) {
         Write-Host "    Applications ($($availableApps.Count)):" -ForegroundColor Yellow
         $availableApps | Sort-Object Name | Select-Object -First 10 | ForEach-Object {
-            Write-Host "      - $($_.Name)" -ForegroundColor White
+            Write-Host "      - $($_.Name)" -ForegroundColor Magenta
+            if ($_.ApplicationID) {
+                Write-Host "        AppID: $($_.ApplicationID)" -ForegroundColor DarkGray
+            }
         }
         if ($availableApps.Count -gt 10) {
             Write-Host "      ... and $($availableApps.Count - 10) more applications" -ForegroundColor Gray
@@ -935,7 +959,13 @@ if ($result.AvailableItems.Count -gt 0) {
     if ($availableTS.Count -gt 0) {
         Write-Host "    Task Sequences ($($availableTS.Count)):" -ForegroundColor Yellow
         $availableTS | Sort-Object Name | ForEach-Object {
-            Write-Host "      - $($_.Name)" -ForegroundColor White
+            Write-Host "      - $($_.Name)" -ForegroundColor Magenta
+            if ($_.AdvertisementID -or $_.PackageID) {
+                $idParts = @()
+                if ($_.AdvertisementID) { $idParts += "AdvID: $($_.AdvertisementID)" }
+                if ($_.PackageID) { $idParts += "PkgID: $($_.PackageID)" }
+                Write-Host "        $($idParts -join ' | ')" -ForegroundColor DarkGray
+            }
         }
     }
 } else {
@@ -945,10 +975,24 @@ if ($result.AvailableItems.Count -gt 0) {
 # ========================================
 # FAILED SECTION
 # ========================================
-Write-Host "`n  [FAILED]" -ForegroundColor Red
+Write-Host "`n  [FAILED]" -ForegroundColor Blue
 if ($result.FailedItems.Count -gt 0) {
     $result.FailedItems | Sort-Object Type, Name | ForEach-Object {
-        Write-Host "    $($_.Type): $($_.Name)" -ForegroundColor Yellow
+        Write-Host "    $($_.Type): $($_.Name)" -ForegroundColor Magenta
+        
+        # Show IDs on separate line
+        $idParts = @()
+        if ($_.Type -eq "Task Sequence") {
+            if ($_.AdvertisementID) { $idParts += "AdvID: $($_.AdvertisementID)" }
+            if ($_.PackageID) { $idParts += "PkgID: $($_.PackageID)" }
+        } elseif ($_.Type -eq "Application") {
+            if ($_.ApplicationID) { $idParts += "AppID: $($_.ApplicationID)" }
+            if ($_.Revision) { $idParts += "Rev: $($_.Revision)" }
+        }
+        if ($idParts.Count -gt 0) {
+            Write-Host "      $($idParts -join ' | ')" -ForegroundColor DarkGray
+        }
+        
         if ($_.ErrorCode -and $_.ErrorCode -ne 0) {
             Write-Host "      Error Code: $($_.ErrorCode)" -ForegroundColor White
         }
