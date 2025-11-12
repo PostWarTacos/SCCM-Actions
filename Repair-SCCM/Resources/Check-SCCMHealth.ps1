@@ -129,8 +129,14 @@ try {
         # Note: Empty execution history is normal, so no corruption flag
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SoftMgmtAgent namespace: $_") | Out-Null
-    $corruption.Add("SoftMgmtAgent namespace corrupt.") | Out-Null
+    # Check if it's just an "Invalid class" error which is common and not corruption
+    if ($_.Exception.Message -match "Invalid class") {
+        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SoftMgmtAgent namespace accessible but no CCM_ExecutionHistory class.") | Out-Null
+        # Note: Invalid class is often normal, so no corruption flag
+    } else {
+        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SoftMgmtAgent namespace: $_") | Out-Null
+        $corruption.Add("SoftMgmtAgent namespace corrupt.") | Out-Null
+    }
 }
 
 # Check if client can access task sequence execution requests
@@ -217,7 +223,24 @@ try {
             "Failed to get"
         )
         
-        $ccmEvalResults = $recentLogs | Select-String -Pattern ($errorPatterns -join '|') -CaseSensitive:$false
+        # Exclude common false positives
+        $excludePatterns = @(
+            "Failed to get SOFTWARE\\Policies\\Microsoft\\Microsoft Antimalware",
+            "DisableIntrusionPreventionSystem"
+        )
+        
+        $ccmEvalResults = $recentLogs | Select-String -Pattern ($errorPatterns -join '|') -CaseSensitive:$false | 
+            Where-Object { 
+                $line = $_.Line
+                $shouldExclude = $false
+                foreach ($exclude in $excludePatterns) {
+                    if ($line -match $exclude) {
+                        $shouldExclude = $true
+                        break
+                    }
+                }
+                return -not $shouldExclude
+            }
     } else {
         $ccmEvalResults = $null
     }
