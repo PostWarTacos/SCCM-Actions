@@ -218,7 +218,7 @@ try {
             "Firewall exception",
             "Exit code: [1-9]",
             "Error code",
-            "check: FAILED",
+            ".*check: FAILED",
             "Failed to connect",
             "Failed to get"
         )
@@ -251,10 +251,41 @@ try {
 
 if ( $ccmEvalResults ) {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client health check failed per CCMEval logs." ) | Out-Null
-    $mostRecentFail = "$( $ccmEvalResults | Select-Object -Last 1 )."
+    $mostRecentFail = "$( $ccmEvalResults | Select-Object -Last 1 )"
+    
+    # Try multiple extraction patterns to get meaningful failure info
     if ($mostRecentFail -match 'LOG\[(.*?)\]LOG') {
-        $failMsg = $matches[1]
+        $failMsg = $matches[1].Trim()
+    } elseif ($mostRecentFail -match '<!\[LOG\[(.*?)$') {
+        $failMsg = $matches[1].Trim()
+    } else {
+        # If no specific pattern matches, try to extract the meaningful part
+        $cleanFail = $mostRecentFail -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+        if ($cleanFail.Length -gt 10) {
+            $failMsg = $cleanFail.Trim()
+        }
     }
+    
+    # If we found "Client Health Check: Failed", try to find preceding context for why it failed
+    if ($mostRecentFail -match "Client Health Check: Failed") {
+        # Look for the most recent failure before this summary message
+        $contextErrors = $ccmEvalResults | Select-Object -SkipLast 1 | Select-Object -Last 3
+        if ($contextErrors) {
+            # Take only the most recent context error for the output
+            $mostRecentContext = $contextErrors | Select-Object -Last 1
+            $cleanContext = $mostRecentContext -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+            if ($cleanContext.Length -gt 10) {
+                $failMsg = $cleanContext.Trim()
+            }
+            
+            # Log all context errors to the health log for full details
+            $allContext = ($contextErrors | ForEach-Object { 
+                $_ -replace '<!\[LOG\[', '' -replace '\]LOG.*$', '' 
+            }) -join "; "
+            $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Context: Health check context errors: $allContext") | Out-Null
+        }
+    }
+    
     # Outputs all fail messages within last week to healthcheck.txt
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: $( $ccmEvalResults )." ) | Out-Null
     $corruption.Add("Corruption in Eval log.") | Out-Null
