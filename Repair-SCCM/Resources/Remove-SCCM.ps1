@@ -384,11 +384,7 @@ try {
             }
             
             Write-Host "Using source path: $cpSource" -ForegroundColor Green
-                    break
-                }
-            } while ($true)
             
-            Write-Host "Using source path: $cpSource" -ForegroundColor Green
         }
     }
     catch {
