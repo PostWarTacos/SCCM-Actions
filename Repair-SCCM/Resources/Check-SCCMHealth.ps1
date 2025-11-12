@@ -267,13 +267,15 @@ if ( $ccmEvalResults ) {
     }
     
     # If we found "Client Health Check: Failed", try to find preceding context for why it failed
-    if ($mostRecentFail -match "Client Health Check: Failed") {
+    if ($mostRecentFail -match "Client Health Check.*Failed") {
         # Look for the most recent failure before this summary message
         $contextErrors = $ccmEvalResults | Select-Object -SkipLast 1 | Select-Object -Last 3
-        if ($contextErrors) {
+        
+        if ($contextErrors -and $contextErrors.Count -gt 0) {
             # Take only the most recent context error for the output
             $mostRecentContext = $contextErrors | Select-Object -Last 1
             $cleanContext = $mostRecentContext -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+            
             if ($cleanContext.Length -gt 10) {
                 $failMsg = $cleanContext.Trim()
             }
@@ -283,6 +285,9 @@ if ( $ccmEvalResults ) {
                 $_ -replace '<!\[LOG\[', '' -replace '\]LOG.*$', '' 
             }) -join "; "
             $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Context: Health check context errors: $allContext") | Out-Null
+        } else {
+            # No context errors found - indicate this in the failure message
+            $failMsg = "Client Health Check: Failed. No additional info in logs."
         }
     }
     
