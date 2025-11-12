@@ -267,17 +267,29 @@ if ( $ccmEvalResults ) {
     }
     
     # If we found "Client Health Check: Failed", try to find preceding context for why it failed
-    if ($mostRecentFail -match "Client Health Check.*Failed") {
+    if ($mostRecentFail -match "Client Health Check.*FAILED") {
         # Look for the most recent failure before this summary message
         $contextErrors = $ccmEvalResults | Select-Object -SkipLast 1 | Select-Object -Last 3
         
         if ($contextErrors -and $contextErrors.Count -gt 0) {
-            # Take only the most recent context error for the output
-            $mostRecentContext = $contextErrors | Select-Object -Last 1
-            $cleanContext = $mostRecentContext -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+            # Find the most recent context error that's different from the most recent fail
+            $mostRecentContext = $null
+            for ($i = $contextErrors.Count - 1; $i -ge 0; $i--) {
+                $cleanContext = $contextErrors[$i] -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+                $cleanMostRecent = $mostRecentFail -replace '<!\[LOG\[', '' -replace '\]LOG.*$', ''
+                
+                # If this context error is different from the most recent fail, use it
+                if ($cleanContext -ne $cleanMostRecent -and $cleanContext.Length -gt 10) {
+                    $mostRecentContext = $cleanContext.Trim()
+                    break
+                }
+            }
             
-            if ($cleanContext.Length -gt 10) {
-                $failMsg = $cleanContext.Trim()
+            if ($mostRecentContext) {
+                $failMsg = $mostRecentContext
+            } else {
+                # All context errors match the most recent fail - no unique context
+                $failMsg = "Client Health Check: FAILED. No additional info in logs."
             }
             
             # Log all context errors to the health log for full details
@@ -287,7 +299,7 @@ if ( $ccmEvalResults ) {
             $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Context: Health check context errors: $allContext") | Out-Null
         } else {
             # No context errors found - indicate this in the failure message
-            $failMsg = "Client Health Check: Failed. No additional info in logs."
+            $failMsg = "Client Health Check: FAILED. No additional info in logs."
         }
     }
     
