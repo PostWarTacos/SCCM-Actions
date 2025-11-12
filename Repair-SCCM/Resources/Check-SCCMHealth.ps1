@@ -9,6 +9,7 @@
 #====================
 
 $healthLog = [System.Collections.ArrayList]@()
+$corruption = [System.Collections.ArrayList]@()
 $healthLogPath = "C:\drivers\CCM\Logs\"
 
 If( -not ( Test-Path $healthLogPath )) {
@@ -25,12 +26,12 @@ try {
     if (Test-Path $clientPath) {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed.") | Out-Null
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec.exe not found. SCCM Client not installed.") | Out-Null
-        $corruption = "CcmExec.exe missing."
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
+        $corruption.Add("CcmExec.exe missing.") | Out-Null
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_") | Out-Null
-    $corruption = "Error checking SCCM installation."
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
+    $corruption.Add("Error checking SCCM installation.") | Out-Null
 }
 				
 # Check if SCCM Client Service is running
@@ -40,11 +41,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service is running.") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service is not running. Status: $($service.Status)") | Out-Null
-        $corruption = "CcmExec service not running."
+        $corruption.Add("CcmExec service not running.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service not found: $_") | Out-Null
-    $corruption = "CcmExec service missing."
+    $corruption.Add("CcmExec service missing.") | Out-Null
 }
 
 # Check Client Version
@@ -54,11 +55,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Version: $($smsClient.ClientVersion)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Client.ClientVersion is null or empty.") | Out-Null
-        $corruption = "Client version not available."
+        $corruption.Add("Client version not available.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Client class: $_") | Out-Null
-    $corruption = "SMS_Client class inaccessible."
+    $corruption.Add("SMS_Client class inaccessible.") | Out-Null
 }    
 
 # Check Site Code
@@ -68,11 +69,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Site Code: $($mp.Name)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.Name is null or empty.") | Out-Null
-        $corruption = "Site Code not available."
+        $corruption.Add("Site Code not available.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Authority class: $_") | Out-Null
-    $corruption = "SMS_Authority class inaccessible."
+    $corruption.Add("SMS_Authority class inaccessible.") | Out-Null
 }
 
 # Check Client ID
@@ -82,11 +83,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client ID: $($ccmClient.ClientId)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCM_Client.ClientId is null or empty.") | Out-Null
-        $corruption = "Client ID not available."
+        $corruption.Add("Client ID not available.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_Client class: $_") | Out-Null
-    $corruption = "CCM_Client class inaccessible."
+    $corruption.Add("CCM_Client class inaccessible.") | Out-Null
 }   
 
 # Check ClientSDK namespace for task sequence capability
@@ -96,11 +97,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible.") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible but no applications found.") | Out-Null
-        $corruption = "ClientSDK namespace empty."
+        $corruption.Add("ClientSDK namespace empty.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing ClientSDK namespace: $_") | Out-Null
-    $corruption = "ClientSDK namespace corrupt."
+    $corruption.Add("ClientSDK namespace corrupt.") | Out-Null
 }
 
 # Check Policy namespace for task sequence policies
@@ -111,11 +112,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible. Found $policyCount task sequences.") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible but no task sequences found.") | Out-Null
-        $corruption = "Policy namespace empty."
+        $corruption.Add("Policy namespace empty.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Policy namespace: $_") | Out-Null
-    $corruption = "Policy namespace corrupt."
+    $corruption.Add("Policy namespace corrupt.") | Out-Null
 }
 
 # Check SoftMgmtAgent namespace for execution tracking
@@ -129,7 +130,7 @@ try {
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SoftMgmtAgent namespace: $_") | Out-Null
-    $corruption = "SoftMgmtAgent namespace corrupt."
+    $corruption.Add("SoftMgmtAgent namespace corrupt.") | Out-Null
 }
 
 # Check if client can access task sequence execution requests
@@ -143,7 +144,7 @@ try {
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_TSExecutionRequest class: $_") | Out-Null
-    $corruption = "TS execution request class corrupt."
+    $corruption.Add("TS execution request class corrupt.") | Out-Null
 }
 
 # Check Management Point Communication
@@ -153,11 +154,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Management Point: $($mp.CurrentManagementPoint)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.CurrentManagementPoint is null or empty.") | Out-Null
-        $corruption = "Management Point not available."
+        $corruption.Add("Management Point not available.") | Out-Null
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Management Point information: $_") | Out-Null
-    $corruption = "Management Point information inaccessible."
+    $corruption.Add("Management Point information inaccessible.") | Out-Null
 }
 
 #================
@@ -233,7 +234,7 @@ if ( $ccmEvalResults ) {
     }
     # Outputs all fail messages within last week to healthcheck.txt
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: $( $ccmEvalResults )." ) | Out-Null
-    $corruption = "Corruption in Eval log."
+    $corruption.Add("Corruption in Eval log.") | Out-Null
 } else {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client passed health check per CCMEval logs." ) | Out-Null
 }
@@ -242,16 +243,51 @@ if ( $ccmEvalResults ) {
 # REPORT RESULTS
 #===============
 
-if ( -not ( $corruption )){
+if ($corruption.Count -eq 0) {
     $results = "Healthy Client"
-} else{
-    if( $corruption -and $failMsg ) {
-        $results = "$corruption $failMsg."
+} else {
+    if ($corruption.Count -eq 1) {
+        # Single corruption issue
+        if ($corruption[0] -eq "Corruption in Eval log." -and $failMsg) {
+            # If only CCM eval issue, show the specific failure message
+            $results = "Corrupt Client. $failMsg"
+        } else {
+            # Show the single corruption issue
+            $results = "Corrupt Client. $($corruption[0])"
+        }
+    } else {
+        # Multiple corruption issues
+        $hasEvalError = $corruption -contains "Corruption in Eval log."
+        
+        if (-not $hasEvalError) {
+            # No CCM eval error - show most recent + note about others
+            $mostRecentIssue = $corruption[-1]
+            $additionalCount = $corruption.Count - 1
+            $results = "Corrupt Client. $mostRecentIssue (+ $additionalCount more issues in log)"
+        } else {
+            # Has CCM eval error - find most recent non-eval error
+            $mostRecentNonEval = $null
+            # Loop backwards through corruption array to find last non-eval error
+            for ($i = $corruption.Count - 1; $i -ge 0; $i--) {
+                if ($corruption[$i] -ne "Corruption in Eval log.") {
+                    $mostRecentNonEval = $corruption[$i]
+                    break
+                }
+            }
+            
+            if ($mostRecentNonEval) {
+                $additionalCount = $corruption.Count - 1
+                $results = "Corrupt Client. $mostRecentNonEval (+ $additionalCount more issues in log)"
+            } else {
+                # Only eval errors somehow - fallback to eval message
+                if ($failMsg) {
+                    $results = "Corrupt Client. $failMsg"
+                } else {
+                    $results = "Corrupt Client. Corruption in Eval log."
+                }
+            }
+        }
     }
-    else {
-        $results = "Corrupt Client. $corruption"
-    }
-    Start-ScheduledTask "Remove-SCCMTask" # Triggers Remove-SCCM task when health check fails.
 }
 
 if ( -not ( Test-Path $healthLogPath )){
