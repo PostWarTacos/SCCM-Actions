@@ -428,7 +428,6 @@ try {
             }
             
             Write-Host "Using source path: $cpSource" -ForegroundColor Green
-            
         }
     }
     catch {
@@ -472,16 +471,13 @@ try {
     $message = "Copying SCCM installation files from $cpSource to $cpDestination"
     Write-LogMessage -Level Info -Message $message
     
-    $robocopyResult = & robocopy $cpSource $cpDestination /E /Z /MT:4 /R:1 /W:2 /NP /V
-    $robocopyExitCode = $LASTEXITCODE
-    
-    # Robocopy exit codes 0-7 are considered success
-    if ( $robocopyExitCode -le 7 ) {
-        $message = "SCCM installation files downloaded successfully."
-        Write-LogMessage -Level Success -Message $message
+    try {
+        Copy-Item $cpSource $cpDestination -Force -Recurse -ErrorAction Stop
+        Write-LogMessage -Level Success -Message "SCCM installation files copied successfully."
     }
-    else {
-        throw "Robocopy failed with exit code: $robocopyExitCode"
+    catch {
+        Write-LogMessage -Level Error -Message "Failed to copy SCCM installation files. Error: $_"
+        $errorCount++
     }
 
     # Verify ccmsetup.exe exists
