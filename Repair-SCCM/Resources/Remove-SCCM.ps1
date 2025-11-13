@@ -467,7 +467,7 @@ try {
         New-Item -ItemType Directory -Path $cpDestination -Force | Out-Null
     }
 
-    # Download files using robocopy
+    # Download files using Copy-Item
     $message = "Copying SCCM installation files from $cpSource to $cpDestination"
     Write-LogMessage -Level Info -Message $message
     
