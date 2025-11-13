@@ -88,30 +88,56 @@ function Stop-ServiceWithTimeout {
     }
 }
 
-function Update-HealthLog {
+Function Write-LogMessage {
     [CmdletBinding()]
-    param (
+    param(
         [Parameter(Mandatory)]
-        [string]$Path,
-
+        [ValidateSet("Info", "Warning", "Error", "Success")]
+        [string]$Level,
+        
         [Parameter(Mandatory)]
         [string]$Message,
-
-        [Parameter()]
-        [switch]$WriteHost,
-
-        [Parameter()]
-        [string]$Color
+        
+        [string]$LogFile = "$healthLogPath\HealthCheck.txt"
     )
-
-    $healthLog.Add("[$(Get-Date -Format 'dd-MMM-yy HH:mm:ss')] Message: $message") | Out-Null
-
-    if ( $PSBoundParameters.ContainsKey('WriteHost') -and $PSBoundParameters.ContainsKey('Color') ) {
-        Write-Host $message -ForegroundColor $Color
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    
+    # Add level-specific prefixes
+    $prefix = switch ($Level) {
+        "Info"    { "[*]" }
+        "Warning" { "[!]" }
+        "Error"   { "[!!!]" }
+        "Success" { "[+]" }
     }
-    elseif ( $PSBoundParameters.ContainsKey('WriteHost') ) {
-        Write-Host $Message
+    
+    # Build the log entry
+    if (-not $prefix) {
+        $logEntry = "[$timestamp] $Message"
     }
+    else {
+        $logEntry = "[$timestamp] $prefix $Message"
+    }
+
+    # Console output with colors
+    switch ($Level) {
+        "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
+        "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
+        "Error"   { Write-Host $logEntry -ForegroundColor Red }
+        "Success" { Write-Host $logEntry -ForegroundColor Green }
+    }
+    
+    # File output
+    if ($LogFile) {
+        try {
+            $logEntry | Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Write-Warning "Failed to write to log file: $($_.Exception.Message)"
+        }
+    }
+    
+    # Add to health log array for backward compatibility
+    $healthLog.Add($logEntry) | Out-Null
 }
 
 
@@ -140,7 +166,7 @@ if ( -not ( Test-Path $healthLogPath )) {
 Clear-Host
 
 $message = "Attempting repair actions on $(hostname)"
-Update-HealthLog -path $healthLogPath -Message $message -WriteHost -Color Cyan
+Write-LogMessage -Level Info -Message $message
 
 # Remove certs and restart service
 # Possible this is the only needed fix.
@@ -173,24 +199,26 @@ if ( $found ){
         # Announce success/fail
         if ( $success ) {
             $message = "Service restarted successfully and MP contacted. Assuming resolved, ending script."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+            Write-LogMessage -Level Success -Message $message
             return 102
         } else {
             $message = "Failed to start service. Continuing with SCCM Client removal and reinstall."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+            Write-LogMessage -Level Error -Message $message
         }   
     }
     catch {
            $message = "Failed to start service. Continuing with SCCM Client removal and reinstall."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+            Write-LogMessage -Level Error -Message $message
     }
 } Else {
     $message = "CcmExec Service not installed. Continuing with SCCM Client removal and reinstall."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+    Write-LogMessage -Level Warning -Message $message
 }
 
 # Clean uninstall
 Write-Host "(Step 2 of 9) Performing SCCM uninstall." -ForegroundColor Cyan
+$standardUninstallSucceeded = $false
+
 if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
     try {
         Get-Service -Name CcmExec -ErrorAction SilentlyContinue | Stop-Service -Force
@@ -200,21 +228,33 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
         if ( $proc.ExitCode -ne 0 ){
             throw "SCCM uninstall failed with exit code $($proc.exitcode)"
         }
-        $message = "Ccmsetup.exe uninstalled."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+        $message = "Standard ccmsetup.exe uninstall completed successfully."
+        Write-LogMessage -Level Success -Message $message
+        $standardUninstallSucceeded = $true
     }
     catch {
-        $message = "Failed to uninstall ccm. Ending script. Caught error: $_"
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
-        return $_
+        $message = "Standard uninstall failed: $_ - Proceeding with force cleanup."
+        Write-LogMessage -Level Warning -Message $message
+        $errorCount++
     }
 } else {
-    $message = "Ccmsetup.exe not found."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+    $message = "Ccmsetup.exe not found - Proceeding with force cleanup."
+    Write-LogMessage -Level Warning -Message $message
 }
 
-# Remove both services “ccmsetup” and “SMS Agent Host”
-Write-Host "(Step 3 of 9) Stopping and removing CcmExec and CcmSetup services." -ForegroundColor Cyan
+# Determine cleanup mode messaging
+if ($standardUninstallSucceeded) {
+    $cleanupMode = "cleanup"
+    $cleanupDescription = "Performing post-uninstall cleanup"
+} else {
+    $cleanupMode = "force uninstall"
+    $cleanupDescription = "Performing force uninstall"
+}
+
+Write-Host "$cleanupDescription of any remaining SCCM components..." -ForegroundColor Yellow
+
+# Remove both services "ccmsetup" and "SMS Agent Host"
+Write-Host "(Step 3 of 9) Stopping and removing CcmExec and CcmSetup services ($cleanupMode)." -ForegroundColor Cyan
 $services = @(
     "ccmexec",
     "ccmsetup"
@@ -225,21 +265,21 @@ foreach ( $service in $services ){
             Stop-ServiceWithTimeout $service
             & sc.exe delete $service
             $message = "$service service found and removed."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green   
+            Write-LogMessage -Level Success -Message $message   
         }
         catch {
             $message = "Failed to stop and remove $service service. Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+            Write-LogMessage -Level Error -Message $message
             $errorCount++
         }
     } else{
         $message = "$service service not found."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+        Write-LogMessage -Level Warning -Message $message
     }        
 }
 
 # Kill all SCCM client processes
-Write-Host "(Step 4 of 9) Killing all tasks related to SCCM." -ForegroundColor Cyan
+Write-Host "(Step 4 of 9) Killing all tasks related to SCCM ($cleanupMode)." -ForegroundColor Cyan
 $files = @(
     "C:\Windows\CCM",
     "C:\Windows\ccmcache",
@@ -257,25 +297,25 @@ foreach ( $file in $files ){
             try {
                 Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
                 $message = "$($proc.ProcessName) killed. Process was tied to $file."
-                Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green    
+                Write-LogMessage -Level Success -Message $message    
             }
             catch {
                 $message = "Failed to kill $($proc.ProcessName) process. Continuing script but may cause issues."
-                Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+                Write-LogMessage -Level Error -Message $message
                 $errorCount++
             }
         } else{
             $message = "Could not find a process tied to $file."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+            Write-LogMessage -Level Warning -Message $message
         }
     } catch {
         $message = "Error checking processes for $file. Continuing script."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+        Write-LogMessage -Level Warning -Message $message
     }
 }
 
 # Delete the folders for SCCM
-Write-Host "(Step 5 of 9) Deleting all SCCM folders and files." -ForegroundColor Cyan
+Write-Host "(Step 5 of 9) Deleting all SCCM folders and files ($cleanupMode)." -ForegroundColor Cyan
 foreach ( $file in $files ){
     if ( Test-Path $file ){
         try {
@@ -283,21 +323,21 @@ foreach ( $file in $files ){
             $ConfirmPreference = 'None'
             Remove-Item $file -Recurse -Force -ErrorAction SilentlyContinue
             $message = "$file found and removed."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green    
+            Write-LogMessage -Level Success -Message $message    
         }
         catch {
             $message = "Failed to remove $file file(s). Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+            Write-LogMessage -Level Error -Message $message
             $errorCount++
         }
     } else{
         $message = "$file not found."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+        Write-LogMessage -Level Warning -Message $message
     }
 }
 
 # Delete the main registry keys associated with SCCM
-Write-Host "(Step 6 of 9) Deleting all SCCM reg keys." -ForegroundColor Cyan
+Write-Host "(Step 6 of 9) Deleting all SCCM reg keys ($cleanupMode)." -ForegroundColor Cyan
 $keys= @(
     "HKLM:\Software\Microsoft\CCM",
     "HKLM:\Software\Microsoft\SMS",
@@ -316,34 +356,38 @@ foreach ( $key in $keys ){
         try {
             Remove-Item $KEY -Recurse -Force -ErrorAction SilentlyContinue
             $message = "$KEY found and removed."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+            Write-LogMessage -Level Success -Message $message
         }
         catch {
             $message = "Failed to remove $key reg key. Continuing script but may cause issues."
-            Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+            Write-LogMessage -Level Error -Message $message
             $errorCount++
         }
     } Else { 
         $message = "Could not find $KEY."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+        Write-LogMessage -Level Warning -Message $message
     }
 }
 
 # Remove SCCM namespaces from WMI repository
-Write-Host "(Step 7 of 9) Remove SCCM namespaces from WMI repo." -ForegroundColor Cyan
+Write-Host "(Step 7 of 9) Remove SCCM namespaces from WMI repo ($cleanupMode)." -ForegroundColor Cyan
 try {
     Get-CimInstance -Query "Select * From __Namespace Where Name='CCM'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     Get-CimInstance -Query "Select * From __Namespace Where Name='CCMVDI'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     Get-CimInstance -Query "Select * From __Namespace Where Name='SmsDm'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     Get-CimInstance -Query "Select * From __Namespace Where Name='sms'" -Namespace "root\cimv2" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     $message = "Namespace(s) found and removed."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+    Write-LogMessage -Level Success -Message $message
 }
 catch {
     $message = "Failed to remove namespace(s). Continuing script but may cause issues."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+    Write-LogMessage -Level Error -Message $message
     $errorCount++
 }
+
+# Cleanup completion message
+$message = "$cleanupDescription completed successfully."
+Write-LogMessage -Level Success -Message $message
 
 # Download required files before reboot
 Write-Host "(Step 8 of 9) Downloading SCCM installation files." -ForegroundColor Cyan
@@ -426,7 +470,7 @@ try {
 
     # Download files using robocopy
     $message = "Copying SCCM installation files from $cpSource to $cpDestination"
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Yellow
+    Write-LogMessage -Level Info -Message $message
     
     $robocopyResult = & robocopy $cpSource $cpDestination /E /Z /MT:4 /R:1 /W:2 /NP /V
     $robocopyExitCode = $LASTEXITCODE
@@ -434,7 +478,7 @@ try {
     # Robocopy exit codes 0-7 are considered success
     if ( $robocopyExitCode -le 7 ) {
         $message = "SCCM installation files downloaded successfully."
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+        Write-LogMessage -Level Success -Message $message
     }
     else {
         throw "Robocopy failed with exit code: $robocopyExitCode"
@@ -444,7 +488,7 @@ try {
     $ccmSetupPath = Join-Path $cpDestination "ccmsetup.exe"
     if ( Test-Path $ccmSetupPath ) {
         $message = "Verified ccmsetup.exe exists at $ccmSetupPath"
-        Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+        Write-LogMessage -Level Success -Message $message
     }
     else {
         throw "ccmsetup.exe not found after download at $ccmSetupPath"
@@ -452,7 +496,7 @@ try {
 }
 catch {
     $message = "Failed to download SCCM installation files. Error: $_"
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+    Write-LogMessage -Level Error -Message $message
     $errorCount++
 }
 
@@ -466,17 +510,15 @@ try {
     Set-ItemProperty -Path $runOnceKey -Name "TriggerReinstallSCCMTask" -Value $taskCommand -Force
 
     $message = "RunOnce registry key created successfully. Reinstall-SCCMTask will be triggered after reboot."
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Green
+    Write-LogMessage -Level Success -Message $message
 }
 catch {
     $message = "Failed to create RunOnce registry key. Error: $_"
-    Update-HealthLog -path $healthLogPath -message $message -WriteHost -color Red
+    Write-LogMessage -Level Error -Message $message
     $errorCount++
 }
 
 Write-Host "Uninstall and wipe of SCCM completed." -ForegroundColor Green
-
-$healthLog >> $healthLogPath\HealthCheck.txt
 
 if ( $errorCount -gt 0 ){
     Write-Host "There were $errorCount non-critical errors." -ForegroundColor Yellow
