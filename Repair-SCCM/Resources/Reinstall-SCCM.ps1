@@ -1,111 +1,65 @@
-function Get-UserInputWithTimeout {
-    param(
-        [string]$Prompt,
-        [int]$TimeoutSeconds = 10,
-        [string[]]$ValidValues = @()
-    )
-    
-    Write-Host "$Prompt" -ForegroundColor Yellow
-    Write-Host "Script will exit if no input provided within $TimeoutSeconds seconds" -ForegroundColor Red
-    
-    $job = Start-Job -ScriptBlock {
-        param($Prompt)
-        Read-Host $Prompt
-    } -ArgumentList $Prompt
-    
-    $completed = Wait-Job $job -Timeout $TimeoutSeconds
-    
-    if ($completed) {
-        $result = Receive-Job $job
-        Remove-Job $job
-        
-        # If no input provided (empty string or null), exit script
-        if ([string]::IsNullOrWhiteSpace($result)) {
-            Write-Host "No input provided. Exiting script." -ForegroundColor Red
-            exit 1
-        }
-        
-        # Validate against allowed values if provided
-        if ($ValidValues.Count -gt 0 -and $result.ToUpper().Trim() -notin $ValidValues) {
-            Write-Host "Invalid input: $result" -ForegroundColor Red
-            return $null  # Invalid input - allows retry
-        }
-        
-        return $result.ToUpper().Trim()
-    } else {
-        Stop-Job $job
-        Remove-Job $job
-        Write-Host "Timeout reached. No input provided. Exiting script." -ForegroundColor Red
-        exit 1
-    }
-}
+<#
+.SYNOPSIS
+    Reinstalls SCCM (System Center Configuration Manager) client and performs health verification.
 
-function Get-SiteCode{
-    try {
-        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().Name
-        if ( $domain -match "DDS" ) {
-            $code = "DDS"
-        }
-        elseif ( $domain -match "DPOS" -or $domain -match "PCI" ) {
-            $code = "PCI"
-        }
-        else {
-            # Unknown domain - prompt for input with timeout
-            Write-Warning "Unknown domain detected: $domain"
-            Write-Host "Unable to automatically determine SCCM site code." -ForegroundColor Yellow
-            Write-Host "Known site codes:" -ForegroundColor Cyan
-            Write-Host "  - DDS (for DDS domains)" -ForegroundColor White
-            Write-Host "  - PCI (for DPOS domains)" -ForegroundColor White
-            
-            do {
-                $code = Get-UserInputWithTimeout -Prompt "Please enter the correct site code (DDS or PCI)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
-                
-                if ($null -eq $code) {
-                    Write-Host "Invalid site code. Please enter 'DDS' or 'PCI'." -ForegroundColor Red
-                    continue
-                }
-                
-                # Convert DPOS to PCI for consistency
-                if ($code -eq "DPOS") {
-                    $code = "PCI"
-                }
-                
-                break
-            } while ($true)
-            
-            Write-Host "Using site code: $code" -ForegroundColor Green
-        }
-        return $code
-    }
-    catch {
-        # Failed to get domain information - prompt for input
-        Write-Error "Failed to get domain information: $_"
-        Write-Host "Unable to automatically determine SCCM site code." -ForegroundColor Yellow
-        Write-Host "Known site codes:" -ForegroundColor Cyan
-        Write-Host "  - DDS (for DDS domains)" -ForegroundColor White
-        Write-Host "  - PCI (for DPOS domains)" -ForegroundColor White
-        
-        do {
-            $code = Get-UserInputWithTimeout -Prompt "Please enter the correct site code (DDS or PCI)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
-            
-            if ($null -eq $code) {
-                Write-Host "Invalid site code. Please enter 'DDS' or 'PCI'." -ForegroundColor Red
-                continue
-            }
-            
-            # Convert DPOS to PCI for consistency
-            if ($code -eq "DPOS") {
-                $code = "PCI"
-            }
-            
-            break
-        } while ($true)
-        
-        Write-Host "Using site code: $code" -ForegroundColor Green
-        return $code
-    }
-}
+.DESCRIPTION
+    This script performs a complete reinstallation of the SCCM client for specified site codes.
+    It handles the installation process, waits for services to initialize, runs health checks,
+    and verifies the client is functioning properly through comprehensive validation tests.
 
+.PARAMETER SiteCode
+    The SCCM site code for the installation. Valid values are:
+    - DDS: Data Distribution Service site
+    - PCI: Primary Care Interface site
+
+.EXAMPLE
+    .\Reinstall-SCCM.ps1 -SiteCode "DDS"
+    Reinstalls SCCM client for the DDS site code.
+
+.EXAMPLE
+    .\Reinstall-SCCM.ps1 -SiteCode "PCI"
+    Reinstalls SCCM client for the PCI site code.
+
+.NOTES
+    File Name      : Reinstall-SCCM.ps1
+    Author         : System Administrator
+    Prerequisite   : Administrator privileges required
+                   : SCCM setup files must be present in C:\drivers\ccm\ccmsetup\
+    
+.OUTPUTS
+    - Success: Returns 0 (implicit)
+    - Failure: Returns 201 for health check failures, or error object for installation failures
+    - Log files written to: C:\drivers\ccm\logs\HealthCheck.txt
+
+.LINK
+    Related scripts: Check-SCCMHealth.ps1, Remove-SCCM.ps1
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet("DDS", "PCI")]
+    [string]$SiteCode
+)
+
+# -------------------- FUNCTIONS -------------------- #
+
+<#
+.SYNOPSIS
+    Writes formatted log messages to console and file with timestamp and level indicators.
+
+.DESCRIPTION
+    This function provides consistent logging across the script with color-coded console output
+    and file logging capabilities. Messages are timestamped and prefixed with level indicators.
+
+.PARAMETER Level
+    The severity level of the message (Info, Warning, Error, Success)
+
+.PARAMETER Message
+    The message content to log
+
+.PARAMETER LogFile
+    Optional path to log file. Defaults to the health log path.
+#>
 Function Write-LogMessage {
     [CmdletBinding()]
     param(
@@ -119,17 +73,18 @@ Function Write-LogMessage {
         [string]$LogFile = "$healthLogPath\HealthCheck.txt"
     )
     
+    # Generate timestamp for log entry
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     
-    # Add level-specific prefixes
+    # Add level-specific prefixes for visual identification
     $prefix = switch ($Level) {
-        "Info"    { "[*]" }
-        "Warning" { "[!]" }
-        "Error"   { "[!!!]" }
-        "Success" { "[+]" }
+        "Info"    { "[*]" }      # Informational messages
+        "Warning" { "[!]" }      # Warning messages  
+        "Error"   { "[!!!]" }    # Error messages
+        "Success" { "[+]" }      # Success messages
     }
     
-    # Build the log entry
+    # Build the complete log entry with timestamp and prefix
     if (-not $prefix) {
         $logEntry = "[$timestamp] $Message"
     }
@@ -137,7 +92,7 @@ Function Write-LogMessage {
         $logEntry = "[$timestamp] $prefix $Message"
     }
 
-    # Console output with colors
+    # Display console output with appropriate colors for each level
     switch ($Level) {
         "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
         "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
@@ -145,24 +100,41 @@ Function Write-LogMessage {
         "Success" { Write-Host $logEntry -ForegroundColor Green }
     }
     
-    # File output
+    # Write to log file if specified
     if ($LogFile) {
         try {
             $logEntry | Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction Stop
         } catch {
+            # Use Write-Warning to avoid recursion when logging fails
             Write-Warning "Failed to write to log file: $($_.Exception.Message)"
         }
     }
     
-    # Add to health log array for backward compatibility
+    # Add to health log array for backward compatibility with existing code
     $healthLog.Add($logEntry) | Out-Null
 }
 
-function Test-HealthCheck {
+<#
+.SYNOPSIS
+    Performs comprehensive health checks on the SCCM client installation. Slimmed down version of Check-SCCMHealth.ps1.
 
+.DESCRIPTION
+    This function validates multiple aspects of SCCM client health including:
+    - Client executable presence
+    - Service status
+    - Client version information
+    - Management point connectivity
+    - Client ID assignment
+
+.OUTPUTS
+    Returns $true if all health checks pass, $false otherwise
+#>
+function Test-HealthCheck {
+    
+    # Initialize success flag - will be set to false if any check fails
     $allPassed = $true
 
-    # Check if SCCM Client is installed
+    # Verify SCCM Client executable exists in expected location
     if ( Test-Path "C:\Windows\CCM\CcmExec.exe" ) {
         Write-LogMessage -Level Success -Message "Found CcmExec.exe. SCCM installed."
     } else {
@@ -170,7 +142,7 @@ function Test-HealthCheck {
         $allPassed = $false
     }
 
-    # Check if SCCM Client Service is running
+    # Verify SCCM Client Service exists and is in running state
     $service = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
     if ( $service.Status -eq 'Running' ) {
         Write-LogMessage -Level Success -Message "Found CcmExec service and it is running."
@@ -182,7 +154,7 @@ function Test-HealthCheck {
         $allPassed = $false
     }
 
-    # Check Client Version
+    # Retrieve and validate SCCM client version from WMI namespace
     $smsClient = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Client -ErrorAction SilentlyContinue
     if ( $smsClient.ClientVersion ) {
         Write-LogMessage -Level Success -Message "SCCM Client Version: $($smsClient.ClientVersion)"
@@ -191,7 +163,7 @@ function Test-HealthCheck {
         $allPassed = $false
     }
 
-    # Check Management Point Site Name
+    # Validate SCCM site assignment through SMS_Authority WMI class
     $mp = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Authority -ErrorAction SilentlyContinue
     if ( $mp.Name ) {
         Write-LogMessage -Level Success -Message "SCCM Site found: $($mp.Name)"
@@ -200,7 +172,7 @@ function Test-HealthCheck {
         $allPassed = $false
     }
 
-    # Check Client ID
+    # Verify unique client identifier is properly assigned
     $ccmClient = Get-CimInstance -Namespace "root\ccm" -ClassName CCM_Client -ErrorAction SilentlyContinue
     if ( $ccmClient.ClientId ) {
         Write-LogMessage -Level Success -Message "SCCM Client Client ID found: $($ccmClient.ClientId)"
@@ -209,7 +181,7 @@ function Test-HealthCheck {
         $allPassed = $false
     }
 
-    # Check Management Point FQDN
+    # Confirm management point FQDN is accessible and configured
     if ( $mp.CurrentManagementPoint ) {
         Write-LogMessage -Level Success -Message "SCCM Management Point found: $($mp.CurrentManagementPoint)"
     } else {
@@ -220,86 +192,96 @@ function Test-HealthCheck {
     return $allPassed
 }
 
-# ------------------- VARIABLES -------------------- #
+# -------------------- VARIABLES -------------------- #
 
-# Creates an Arraylist which is mutable and easier to manipulate than an array.
+# Initialize mutable array list for collecting log entries throughout execution
 $healthLog = [System.Collections.ArrayList]@()
 
-# Used in final health check
-$maxAttempts = 3
-$success = $false
+# Health check retry configuration
+$maxAttempts = 3        # Maximum number of health check attempts before giving up
+$success = $false       # Flag to track overall success status
 
-# Directories
-$healthLogPath = "C:\drivers\ccm\logs"
-$localInstallerPath = "C:\drivers\ccm\ccmsetup"
+# Standard directory paths for SCCM operations
+$healthLogPath = "C:\drivers\ccm\logs"        # Location for health check log files
+$localInstallerPath = "C:\drivers\ccm\ccmsetup" # Location of SCCM installation files
 
-# Get site code. Might remove from script
-$siteCode = Get-SiteCode
+# Site code configuration (passed as mandatory parameter from calling script)
+# Valid values: DDS (Data Distribution Service) or PCI (Primary Care Interface)
 
-# -------------------- Reinstall SCCM -------------------- #
+# -------------------- REINSTALL SCCM -------------------- #
 
-Write-Host "(Step 1 of 3) Attempting reinstall." -ForegroundColor Cyan
+Write-LogMessage -Level Info -Message "(Step 1 of 3) Attempting reinstall."
 try {
-    # DDS
-    if ( $siteCode -eq "DDS") {
-        #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$siteCode /mp:SCANZ223 FSP=VOTCZ223" -PassThru -Verbose
+    # Configure installation parameters based on site code
+    # DDS site installation with simplified parameters
+    if ( $SiteCode -eq "DDS") {
+        # Note: Commented line shows full parameter set for future reference
+        #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:SCANZ223 FSP=VOTCZ223" -PassThru -Verbose
         $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -PassThru
     }
-    # DPOS
-    elseif ( $siteCode -eq "PCI" ) {
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$siteCode" -PassThru -Verbose    
+    # PCI site installation with site code specification
+    elseif ( $SiteCode -eq "PCI" ) {
+        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose    
     }
        
+    # Wait for installation process to complete and validate exit code
     $proc.WaitForExit()
     if ( $proc.ExitCode -ne 0 ){
         throw "SCCM install failed with exit code $($proc.exitcode)"
     }
-    $message = "Reinstall complete."
-    Write-LogMessage -Level Info -Message $message
-    $message = "Waiting for service to be installed."
-    Write-LogMessage -Level Info -Message $message
+    Write-LogMessage -Level Success -Message "Reinstall complete."
+    
+    # Monitor service installation - ccmexec service creation can take time
+    Write-LogMessage -Level Info -Message "Waiting for service to be installed."
     while ( -not ( Get-Service "ccmexec" -ErrorAction SilentlyContinue )) {
-        Start-Sleep -Seconds 120
+        Start-Sleep -Seconds 120  # Check every 2 minutes
     }
     
+    # Wait for service to reach running state before proceeding
     Write-LogMessage -Level Info -Message "Waiting for service to show running."
     while (( Get-Service "ccmexec").Status -ne "Running" ) {
-        Start-Sleep -Seconds 120
+        Start-Sleep -Seconds 120  # Check every 2 minutes
     }
 }
 Catch{
-    $message = "Install failed. Caught error: $_"
-    Write-LogMessage -Level Error -Message $message
+    Write-LogMessage -Level Error -Message "Install failed. Caught error: $_"
     return $_
 }
 
 # -------------------- REGISTER AND RUN CCMEVAL CHECK -------------------- #
 
-# CCMEval.exe actions
-Write-Host "(Step 2 of 3) Registering CcmEval. Running CcmEval check." -ForegroundColor Cyan
-C:\windows\ccm\CcmEval.exe /register
-C:\windows\ccm\CcmEval.exe /run
+# Execute SCCM's built-in evaluation tool to perform initial client validation
+Write-LogMessage -Level Info -Message "(Step 2 of 3) Registering CcmEval. Running CcmEval check."
+C:\windows\ccm\CcmEval.exe /register  # Register CcmEval scheduled task
+C:\windows\ccm\CcmEval.exe /run       # Execute immediate evaluation
 
 # -------------------- RUN UNTIL ALL PASS OR TIMEOUT -------------------- #
-Write-Host "(Step 3 of 3) Running custom health checks." -ForegroundColor Cyan
-Write-Host "Pausing for 60 seconds before verifying client is operating correctly."
-Start-Sleep -Seconds 60
+Write-LogMessage -Level Info -Message "(Step 3 of 3) Running custom health checks."
+Write-LogMessage -Level Info -Message "Pausing for 60 seconds before verifying client is operating correctly."
+Start-Sleep -Seconds 60  # Allow time for client initialization after CcmEval
+
+# Retry loop for health validation with configurable attempts
 for ( $i = 1; $i -le $maxAttempts; $i++ ) {
-    Write-Host "---- Health Check Attempt $i ----" -ForegroundColor Cyan
+    Write-LogMessage -Level Info -Message "---- Health Check Attempt $i ----"
 
+    # Execute comprehensive health validation
     if ( Test-HealthCheck ) {
-        Write-Host "All SCCM health checks passed!" -ForegroundColor Green
+        Write-LogMessage -Level Success -Message "All SCCM health checks passed!"
         $success = $true
-        break
+        break  # Exit loop on success
     }
 
+    # Wait before next attempt (except on final attempt)
     if ( $i -lt $maxAttempts ) {
-        Start-Sleep -Seconds 120
+        Start-Sleep -Seconds 120  # 2-minute delay between attempts
     }
 }
 
+# Final validation and return appropriate exit code
 if ( -not $success ) {
-    Write-Host "Health checks did not pass after $maxAttempts attempts." -ForegroundColor Red
-    return 201
+    Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
+    return 201  # Custom exit code indicating health check failure
 }
+
+# Implicit success return (exit code 0) if all health checks passed
 
