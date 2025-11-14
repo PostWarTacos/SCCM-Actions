@@ -175,9 +175,11 @@ $ccmEvalLogPath = "C:\Windows\CCM\Logs\CCMEval.log"
 
 # Generate the log if it doesn't exist and re-register it as scheduled task
 if ( -not ( Test-Path $ccmEvalLogPath )) {
-    C:\Windows\ccm\CcmEval.exe /register
-    C:\Windows\ccm\CcmEval.exe /run
-    Start-Sleep -Seconds 120
+    if ( test-path "C:\Windows\ccm\CcmEval.exe" ){
+        C:\Windows\ccm\CcmEval.exe /register
+        C:\Windows\ccm\CcmEval.exe /run
+        Start-Sleep -Seconds 120
+    }
 }
 
 # Get the current date and calculate the date a week ago
