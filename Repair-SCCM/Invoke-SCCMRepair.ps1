@@ -69,6 +69,8 @@
     - Reinstall-SCCM.ps1: Installs fresh SCCM client with site configuration
 #>
 
+#Requires -Version 5.0
+#Requires -RunAsAdministrator
 
 # -------------------- FUNCTIONS -------------------- #
 
@@ -331,8 +333,8 @@ Write-LogMessage -Level Info -Message "Loaded $($targets.Count) target computers
 # These scripts contain the actual SCCM remediation logic
 $resourcesPath = Join-Path $PSScriptRoot "Resources"
 $healthCheckScript = Join-Path $resourcesPath "Check-SCCMHealth.ps1"    # Validates SCCM client health
-$removeScript = Join-Path $resourcesPath "INV_Remove-SCCM.ps1"              # Removes existing SCCM client
-$reinstallScript = Join-Path $resourcesPath "INV_Reinstall-SCCM.ps1"        # Installs fresh SCCM client
+$removeScript = Join-Path $resourcesPath "Remove-SCCM.ps1"              # Removes existing SCCM client
+$reinstallScript = Join-Path $resourcesPath "Reinstall-SCCM.ps1"        # Installs fresh SCCM client
 
 # Determine appropriate SCCM site code (auto-detect or prompt user)
 $siteCode = Get-SiteCode

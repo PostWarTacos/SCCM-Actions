@@ -32,8 +32,8 @@ function ConvertTo-Base64EncodedScript {
 # Build paths relative to the script's location in Resources folder
 $resourcesPath = Join-Path $PSScriptRoot "Resources"
 $healthCheckScript = Join-Path $resourcesPath "Check-SCCMHealth.ps1"
-$removeScript = Join-Path $resourcesPath "SCHTSK_Remove-SCCM.ps1"
-$reinstallScript = Join-Path $resourcesPath "SCHTSK_Reinstall-SCCM.ps1"
+$removeScript = Join-Path $resourcesPath "Remove-SCCM.ps1"
+$reinstallScript = Join-Path $resourcesPath "Reinstall-SCCM.ps1"
 
 # Validate script paths exist before encoding
 $scriptPaths = @{

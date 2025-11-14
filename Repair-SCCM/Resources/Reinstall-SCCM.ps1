@@ -22,6 +22,8 @@
 
 .NOTES
     File Name      : Reinstall-SCCM.ps1
+    Version        : 1.3
+    Last Updated   : 2025-11-14
     Author         : System Administrator
     Prerequisite   : Administrator privileges required
                    : SCCM setup files must be present in C:\drivers\ccm\ccmsetup\
@@ -45,12 +47,81 @@ param(
 
 <#
 .SYNOPSIS
+    Determines if the PowerShell session is running interactively or non-interactively.
+.DESCRIPTION
+    Checks if the PowerShell session is running interactively (manual execution)
+    or non-interactively (scheduled task, service, etc.). This affects how the
+    script handles user prompts and output display.
+    
+    The function detects non-interactive sessions by:
+    - Checking if parent process is svchost.exe (Task Scheduler service)
+    - Verifying if no console session exists (SESSIONNAME environment variable)
+    - Detecting if running in background/service context
+.OUTPUTS
+    Returns $true if session is interactive, $false if non-interactive
+.EXAMPLE
+    $isInteractive = Test-InteractiveSession
+    if ($isInteractive) {
+        # Show prompts and wait for user input
+    } else {
+        # Run silently without prompts
+    }
+#>
+function Test-InteractiveSession {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    
+    try {
+        # Start with assumption that session is interactive
+        $isInteractive = $true
+        
+        # Get current process information
+        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
+        
+        if ($currentProcess) {
+            # Get parent process information
+            $parentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($currentProcess.ParentProcessId)" -ErrorAction SilentlyContinue
+            
+            # Check if parent process is svchost.exe (Task Scheduler service)
+            # or if no console session exists (SESSIONNAME environment variable is null)
+            if ($parentProcess -and ($parentProcess.Name -eq "svchost.exe" -or $env:SESSIONNAME -eq $null)) {
+                $isInteractive = $false
+            }
+            
+            # Additional checks for non-interactive contexts
+            if ($isInteractive) {
+                # Check if running in Windows Service context
+                if ($env:USERNAME -eq "SYSTEM" -or $env:USERNAME -eq "LOCAL SERVICE" -or $env:USERNAME -eq "NETWORK SERVICE") {
+                    $isInteractive = $false
+                }
+                
+                # Check if console host is available
+                try {
+                    [System.Console]::KeyAvailable | Out-Null
+                } catch {
+                    # If console is not available, likely non-interactive
+                    $isInteractive = $false
+                }
+            }
+        }
+        
+        return $isInteractive
+        
+    } catch {
+        # If detection fails, assume non-interactive to be safe
+        # This prevents hanging on prompts in automated environments
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
     Writes formatted log messages to console and file with timestamp and level indicators.
 
 .DESCRIPTION
-    This function provides consistent logging across the script with conditional console output
-    and file logging capabilities. Console output with colors is only shown when running
-    interactively (not as a scheduled task). Messages are timestamped and prefixed with level indicators.
+    This function provides consistent logging across the script with color-coded console output
+    and file logging capabilities. Messages are timestamped and prefixed with level indicators.
 
 .PARAMETER Level
     The severity level of the message (Info, Warning, Error, Success)
@@ -93,26 +164,7 @@ Function Write-LogMessage {
         $logEntry = "[$timestamp] $prefix $Message"
     }
 
-    # Only display console output when running interactively (not as scheduled task)
-    # Check if we have an interactive console and if the process was started by Task Scheduler
-    $isInteractive = $true
-    
-    # Detect if running as scheduled task by checking parent process and environment
-    try {
-        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
-        if ($currentProcess) {
-            $parentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($currentProcess.ParentProcessId)" -ErrorAction SilentlyContinue
-            # If parent process is svchost.exe (Task Scheduler service) or if no console window exists
-            if ($parentProcess -and ($parentProcess.Name -eq "svchost.exe" -or $env:SESSIONNAME -eq $null)) {
-                $isInteractive = $false
-            }
-        }
-    } catch {
-        # If detection fails, assume non-interactive to be safe
-        $isInteractive = $false
-    }
-    
-    # Display console output with appropriate colors only when interactive
+    # Display console output with appropriate colors for each level (only when running interactively)
     if ($isInteractive) {
         switch ($Level) {
             "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
@@ -230,8 +282,13 @@ $localInstallerPath = "C:\drivers\ccm\ccmsetup" # Location of SCCM installation 
 # Site code configuration (passed as mandatory parameter from calling script)
 # Valid values: DDS (Data Distribution Service) or PCI (Primary Care Interface)
 
+# Session detection - determines if running interactively or as scheduled task
+$isInteractive = Test-InteractiveSession
+
 # -------------------- REINSTALL SCCM -------------------- #
 
+Write-LogMessage -Level Info -Message "Starting SCCM reinstallation for site code: $SiteCode"
+Write-LogMessage -Level Info -Message "Session Mode: $(if ($isInteractive) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
 Write-LogMessage -Level Info -Message "(Step 1 of 3) Attempting reinstall."
 try {
     # Configure installation parameters based on site code
