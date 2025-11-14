@@ -15,14 +15,29 @@
     operations remotely on target machines. It provides detailed logging and handles
     errors gracefully, maintaining success/failure tracking for all operations.
 
-.PARAMETER None
-    This script uses interactive prompts to gather required information:
+.PARAMETER ComputerName
+    Specifies the target computer(s) for SCCM remediation.
+    Accepts a single computer name, an array of computer names, or pipeline input.
+    If not provided, the script will prompt for a target computer list file via file dialog.
+    
+    Examples:
+    - Single computer: -ComputerName "Computer01"
+    - Multiple computers: -ComputerName @("Computer01", "Computer02", "Computer03")
+    - Pipeline input: Get-Content computers.txt | .\Invoke-SCCMRepair.ps1
+    
+    When this parameter is not specified, the script uses interactive prompts to gather:
     - Target computer list file (selected via file dialog)
     - SCCM site code (auto-detected or manually entered)
 
 .INPUTS
-    Text file containing list of target computer names (one per line)
-    Located by default on the user's desktop
+    System.String[]
+        Array of computer names can be passed via the ComputerName parameter
+        or through pipeline input from Get-Content or other cmdlets.
+    
+    System.String
+        Text file containing list of target computer names (one per line)
+        Selected via file dialog when ComputerName parameter is not provided.
+        Located by default on the user's desktop.
 
 .OUTPUTS
     Two result files created on the desktop:
@@ -37,6 +52,26 @@
     2. Auto-detect or prompt for SCCM site code
     3. Process each computer in the list
     4. Generate success/failure reports on desktop
+
+.EXAMPLE
+    .\Invoke-SCCMRepair.ps1 -ComputerName "COMPUTER01"
+    
+    Performs SCCM remediation on a single computer named COMPUTER01.
+    
+.EXAMPLE
+    .\Invoke-SCCMRepair.ps1 -ComputerName @("COMPUTER01", "COMPUTER02", "COMPUTER03")
+    
+    Performs SCCM remediation on multiple specified computers.
+    
+.EXAMPLE
+    Get-Content "C:\computers.txt" | .\Invoke-SCCMRepair.ps1
+    
+    Reads computer names from a text file and pipes them to the script for processing.
+    
+.EXAMPLE
+    Get-ADComputer -Filter "Name -like 'WS-*'" | Select-Object -ExpandProperty Name | .\Invoke-SCCMRepair.ps1
+    
+    Retrieves computer names from Active Directory and processes them through the remediation script.
 
 .NOTES
     Author: Matthew Wurtz
@@ -68,6 +103,27 @@
     - Remove-SCCM.ps1: Removes existing SCCM client installation
     - Reinstall-SCCM.ps1: Installs fresh SCCM client with site configuration
 #>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $false, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Position = 0)]
+    [Alias('Computer', 'Computers', 'CN')]
+    [string[]]$ComputerName
+)
+
+begin {
+    # Initialize array to collect pipeline input
+    $PipelineComputers = @()
+}
+
+process {
+    # Collect computer names from pipeline
+    if ($ComputerName) {
+        $PipelineComputers += $ComputerName
+    }
+}
+
+end {
 
 #Requires -Version 5.0
 #Requires -RunAsAdministrator
@@ -320,14 +376,22 @@ $desktop = [Environment]::GetFolderPath('Desktop')
 $remediationSuccess = Join-Path $desktop "success.txt"
 $remediationFail = Join-Path $desktop "fail.txt"
 
-# Prompt user to select target computer list file
-# File should contain one computer name per line
-Write-LogMessage -Level Info -Message "Select target file containing list of computers..."
-$targetFile = Get-FileName -initialDirectory $desktop
-
-# Load target computer names from selected file
-$targets = Get-Content $targetFile
-Write-LogMessage -Level Info -Message "Loaded $($targets.Count) target computers from: $targetFile"
+# Determine target computers from parameter or file selection
+if ($PipelineComputers.Count -gt 0) {
+    # Use computers provided via parameter or pipeline
+    $targets = $PipelineComputers
+    Write-LogMessage -Level Info -Message "Using $($targets.Count) target computers provided via parameter/pipeline"
+    Write-LogMessage -Level Info -Message "Target computers: $($targets -join ', ')"
+} else {
+    # Prompt user to select target computer list file
+    # File should contain one computer name per line
+    Write-LogMessage -Level Info -Message "Select target file containing list of computers..."
+    $targetFile = Get-FileName -initialDirectory $desktop
+    
+    # Load target computer names from selected file
+    $targets = Get-Content $targetFile
+    Write-LogMessage -Level Info -Message "Loaded $($targets.Count) target computers from: $targetFile"
+}
 
 # Build full paths to required resource scripts in Resources subfolder
 # These scripts contain the actual SCCM remediation logic
@@ -620,3 +684,5 @@ Write-LogMessage -Level Info -Message "  Total Processed: $($successCount + $fai
 
 Write-LogMessage -Level Info -Message "`nReview the result files on your desktop for detailed information."
 Write-LogMessage -Level Success -Message "SCCM remediation script execution complete."
+
+} # End of 'end' block
