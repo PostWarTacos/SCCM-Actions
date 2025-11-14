@@ -32,8 +32,8 @@ function ConvertTo-Base64EncodedScript {
 # Build paths relative to the script's location in Resources folder
 $resourcesPath = Join-Path $PSScriptRoot "Resources"
 $healthCheckScript = Join-Path $resourcesPath "Check-SCCMHealth.ps1"
-$removeScript = Join-Path $resourcesPath "Remove-SCCM.ps1"
-$reinstallScript = Join-Path $resourcesPath "Reinstall-SCCM.ps1"
+$removeScript = Join-Path $resourcesPath "SCHTSK_Remove-SCCM.ps1"
+$reinstallScript = Join-Path $resourcesPath "SCHTSK_Reinstall-SCCM.ps1"
 
 # Validate script paths exist before encoding
 $scriptPaths = @{
@@ -142,9 +142,9 @@ Register-ScheduledTask -TaskName "Check-SCCMHealthTask" `
                        -Description $desc
 
 if(Get-ScheduledTask -TaskName Check-SCCMHealthTask){
-    $results += "✓ Created Check-SCCMHealth task"
+    $results += "[+] Created Check-SCCMHealth task"
 } else{
-    $results += "✗ Failed to create Check-SCCMHealth task"
+    $results += "[!] Failed to create Check-SCCMHealth task"
 }
 
 #=============================
@@ -162,9 +162,9 @@ Register-ScheduledTask -TaskName "Remove-SCCMTask" `
                        -Description $desc
 
 if(Get-ScheduledTask -TaskName Remove-SCCMTask){
-    $results += "✓ Created Remove-SCCM task"
+    $results += "[+] Created Remove-SCCM task"
 } else{
-    $results += "✗ Failed to create Remove-SCCM task"
+    $results += "[!] Failed to create Remove-SCCM task"
 }
 
 #========================
@@ -182,9 +182,9 @@ Register-ScheduledTask -TaskName "Reinstall-SCCMTask" `
                         -Description $desc
 
 if(Get-ScheduledTask -TaskName Reinstall-SCCMTask){
-    $results += "✓ Created Reinstall-SCCM task"
+    $results += "[+] Created Reinstall-SCCM task"
 } else{
-    $results += "✗ Failed to create Reinstall-SCCM task"
+    $results += "[!] Failed to create Reinstall-SCCM task"
 }
 
 # Return all results

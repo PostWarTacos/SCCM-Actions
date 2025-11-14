@@ -180,7 +180,7 @@ function Get-UserInputWithTimeout {
     
     Write-Host "$Prompt" -NoNewline
     
-    $input = ""
+    $userInput = ""
     $startTime = Get-Date
     $timeoutTime = $startTime.AddSeconds($TimeoutSeconds)
     
@@ -198,13 +198,13 @@ function Get-UserInputWithTimeout {
                 break
             }
             elseif ($key.Key -eq 'Backspace') {
-                if ($input.Length -gt 0) {
-                    $input = $input.Substring(0, $input.Length - 1)
+                if ($userInput.Length -gt 0) {
+                    $userInput = $userInput.Substring(0, $userInput.Length - 1)
                     Write-Host "`b `b" -NoNewline
                 }
             }
             else {
-                $input += $key.KeyChar
+                $userInput += $key.KeyChar
                 Write-Host $key.KeyChar -NoNewline
             }
         }
@@ -219,15 +219,15 @@ function Get-UserInputWithTimeout {
     }
     
     # If no input provided (empty string), exit script
-    if ([string]::IsNullOrWhiteSpace($input)) {
+    if ([string]::IsNullOrWhiteSpace($userInput)) {
         Write-LogMessage -Level Error -Message "No input provided. Exiting script."
         exit 1
     }
     
     # Validate against allowed values if provided
-    $trimmedInput = $input.ToUpper().Trim()
+    $trimmedInput = $userInput.ToUpper().Trim()
     if ($ValidValues.Count -gt 0 -and $trimmedInput -notin $ValidValues) {
-        Write-LogMessage -Level Error -Message "Invalid input: $input"
+        Write-LogMessage -Level Error -Message "Invalid input: $userInput"
         return $null  # Invalid input - allows retry
     }
     
@@ -331,8 +331,8 @@ Write-LogMessage -Level Info -Message "Loaded $($targets.Count) target computers
 # These scripts contain the actual SCCM remediation logic
 $resourcesPath = Join-Path $PSScriptRoot "Resources"
 $healthCheckScript = Join-Path $resourcesPath "Check-SCCMHealth.ps1"    # Validates SCCM client health
-$removeScript = Join-Path $resourcesPath "Remove-SCCM.ps1"              # Removes existing SCCM client
-$reinstallScript = Join-Path $resourcesPath "Reinstall-SCCM.ps1"        # Installs fresh SCCM client
+$removeScript = Join-Path $resourcesPath "INV_Remove-SCCM.ps1"              # Removes existing SCCM client
+$reinstallScript = Join-Path $resourcesPath "INV_Reinstall-SCCM.ps1"        # Installs fresh SCCM client
 
 # Determine appropriate SCCM site code (auto-detect or prompt user)
 $siteCode = Get-SiteCode

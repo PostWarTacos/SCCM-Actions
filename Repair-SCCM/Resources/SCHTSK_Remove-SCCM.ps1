@@ -3,7 +3,8 @@
     Removes and cleans up Microsoft SCCM (System Center Configuration Manager) client components.
 
 .DESCRIPTION
-    This script performs a comprehensive removal of SCCM client components from a Windows system.
+    This script performs a comprehensive removal of SCCM client components from a Windows system
+    and automatically schedules reinstallation after reboot. Designed for unattended operation.
     It attempts a graceful uninstall first, followed by aggressive cleanup if needed.
     
     The script performs the following actions:
@@ -14,6 +15,12 @@
     5. Removes SCCM folders and files
     6. Cleans SCCM registry keys
     7. Removes SCCM WMI namespaces
+    8. Configures RunOnce registry key to trigger SCCM reinstall after reboot
+    9. Reports completion status and any non-critical errors encountered
+    10. Initiates system reboot to complete removal and trigger automatic reinstallation
+    
+    IMPORTANT: This script requires the "Reinstall-SCCMTask" scheduled task to be present,
+    which is created by Create-SCCMScheduledTasks.ps1.
 
 .PARAMETER None
     This script does not accept parameters.
@@ -24,17 +31,23 @@
     Runs the complete SCCM removal process with detailed logging.
 
 .NOTES
-    Author: [Your Name]
-    Version: 1.0
-    Requires: PowerShell 5.0+, Administrator privileges
+    Author: Matthew Wurtz
+    Version: 2.0
+    Requires: PowerShell 5.0+, Administrator privileges, "Reinstall-SCCMTask" scheduled task
     
-    WARNING: This script will completely remove SCCM client components.
-    Ensure you have a way to reinstall the SCCM client if needed.
+    WARNING: This script will completely remove SCCM client components and reboot the system.
+    The system will automatically reinstall SCCM after reboot via the RunOnce registry mechanism.
+    
+    Prerequisites:
+    - "Reinstall-SCCMTask" scheduled task must exist (created by Create-SCCMScheduledTasks.ps1)
+    - SCCM installation files must be available in C:\drivers\ccm\ccmsetup\
     
     Log files are created at: C:\drivers\ccm\logs\HealthCheck.txt
 
 .OUTPUTS
     Returns exit code 102 if quick fix (step 1) succeeds, otherwise continues full removal.
+    System will automatically reboot after completing removal process.
+    SCCM client will be automatically reinstalled after reboot via scheduled task.
     All actions are logged to both console and log file.
 #>
 
@@ -160,7 +173,8 @@ function Stop-ServiceWithTimeout {
     Writes formatted log messages to console and file with color coding.
 .DESCRIPTION
     Creates timestamped log entries with level-specific prefixes and colors.
-    Outputs to both console (with colors) and log file simultaneously.
+    Console output with colors is only shown when running interactively (not as scheduled task).
+    Always writes to log file regardless of execution context.
 .PARAMETER Level
     Log level: Info, Warning, Error, or Success
 .PARAMETER Message
@@ -199,12 +213,33 @@ Function Write-LogMessage {
         $logEntry = "[$timestamp] $prefix $Message"
     }
 
-    # Console output with colors
-    switch ($Level) {
-        "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
-        "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
-        "Error"   { Write-Host $logEntry -ForegroundColor Red }
-        "Success" { Write-Host $logEntry -ForegroundColor Green }
+    # Only display console output when running interactively (not as scheduled task)
+    # Check if we have an interactive console and if the process was started by Task Scheduler
+    $isInteractive = $true
+    
+    # Detect if running as scheduled task by checking parent process and environment
+    try {
+        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
+        if ($currentProcess) {
+            $parentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($currentProcess.ParentProcessId)" -ErrorAction SilentlyContinue
+            # If parent process is svchost.exe (Task Scheduler service) or if no console window exists
+            if ($parentProcess -and ($parentProcess.Name -eq "svchost.exe" -or $env:SESSIONNAME -eq $null)) {
+                $isInteractive = $false
+            }
+        }
+    } catch {
+        # If detection fails, assume non-interactive to be safe
+        $isInteractive = $false
+    }
+
+    # Display console output with appropriate colors only when interactive
+    if ($isInteractive) {
+        switch ($Level) {
+            "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
+            "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
+            "Error"   { Write-Host $logEntry -ForegroundColor Red }
+            "Success" { Write-Host $logEntry -ForegroundColor Green }
+        }
     }
     
     # File output
@@ -246,7 +281,7 @@ if ( -not ( Test-Path $healthLogPath )) {
 
 # ------------------- MAIN SCRIPT -------------------- #
 # 
-# The script follows a 9-step process:
+# The script follows a 10-step process:
 # 1. Quick fix attempt - restart service and remove SMS certificates
 # 2. Standard SCCM uninstall using ccmsetup.exe
 # 3. Force stop and remove SCCM services
@@ -254,7 +289,9 @@ if ( -not ( Test-Path $healthLogPath )) {
 # 5. Remove SCCM files and folders
 # 6. Clean SCCM registry keys
 # 7. Remove SCCM WMI namespaces
-# 8-9. Completion and error reporting
+# 8. Configure post-reboot SCCM reinstallation (RunOnce key)
+# 9. Completion and error reporting
+# 10. System reboot to trigger SCCM reinstall
 
 Clear-Host
 
@@ -267,7 +304,7 @@ Write-LogMessage -Level Info -Message "Attempting repair actions on $(hostname)"
 # - Restarting the service
 # - Testing connectivity to Management Point (MP)
 # If successful, script exits early (return code 102)
-Write-LogMessage -Level Info -Message "(Step 1 of 9) Stopping CcmExec to remove SMS certs."
+Write-LogMessage -Level Info -Message "(Step 1 of 10) Stopping CcmExec to remove SMS certs."
 $found = Get-Service CcmExec -ErrorAction SilentlyContinue
 if ( $found ){
     try {
@@ -314,7 +351,7 @@ if ( $found ){
 
 # STEP 2: Attempt standard SCCM uninstall using built-in ccmsetup.exe
 # This is the preferred method as it follows Microsoft's recommended uninstall process
-Write-LogMessage -Level Info -Message "(Step 2 of 9) Performing SCCM uninstall."
+Write-LogMessage -Level Info -Message "(Step 2 of 10) Performing SCCM uninstall."
 $standardUninstallSucceeded = $false
 
 if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
@@ -353,7 +390,7 @@ Write-LogMessage -Level Warning -Message "$cleanupDescription of any remaining S
 # STEP 3: Remove SCCM Windows services
 # - ccmexec: Main SCCM client service ("SMS Agent Host")
 # - ccmsetup: SCCM client installation/maintenance service
-Write-LogMessage -Level Info -Message "(Step 3 of 9) Stopping and removing CcmExec and CcmSetup services ($cleanupMode)."
+Write-LogMessage -Level Info -Message "(Step 3 of 10) Stopping and removing CcmExec and CcmSetup services ($cleanupMode)."
 $services = @(
     "ccmexec",
     "ccmsetup"
@@ -377,7 +414,7 @@ foreach ( $service in $services ){
 # STEP 4: Terminate any remaining SCCM-related processes
 # Searches for processes by name pattern (*ccm*) and by loaded modules
 # This ensures no SCCM processes are holding files/registry keys that need cleanup
-Write-LogMessage -Level Info -Message "(Step 4 of 9) Killing all tasks related to SCCM ($cleanupMode)."
+Write-LogMessage -Level Info -Message "(Step 4 of 10) Killing all tasks related to SCCM ($cleanupMode)."
 # Define SCCM file system locations to be removed
 $files = @(
     "C:\Windows\CCM",          # Main SCCM client directory
@@ -411,7 +448,7 @@ foreach ( $file in $files ){
 
 # STEP 5: Remove SCCM files and directories
 # Uses takeown to gain ownership of files before deletion (handles permission issues)
-Write-LogMessage -Level Info -Message "(Step 5 of 9) Deleting all SCCM folders and files ($cleanupMode)."
+Write-LogMessage -Level Info -Message "(Step 5 of 10) Deleting all SCCM folders and files ($cleanupMode)."
 foreach ( $file in $files ){
     if ( Test-Path $file ){
         try {
@@ -431,7 +468,7 @@ foreach ( $file in $files ){
 
 # STEP 6: Remove SCCM registry keys
 # This removes all traces of SCCM from the Windows registry
-Write-LogMessage -Level Info -Message "(Step 6 of 9) Deleting all SCCM reg keys ($cleanupMode)."
+Write-LogMessage -Level Info -Message "(Step 6 of 10) Deleting all SCCM reg keys ($cleanupMode)."
 
 # Define all SCCM-related registry paths
 $keys= @(
@@ -474,7 +511,7 @@ foreach ( $key in $keys ){
 # STEP 7: Remove SCCM WMI (Windows Management Instrumentation) namespaces
 # These namespaces contain SCCM client configuration and status information
 # Removing them ensures complete cleanup of SCCM client data structures
-Write-LogMessage -Level Info -Message "(Step 7 of 9) Remove SCCM namespaces from WMI repo ($cleanupMode)."
+Write-LogMessage -Level Info -Message "(Step 7 of 10) Remove SCCM namespaces from WMI repo ($cleanupMode)."
 try {
     # Remove main CCM namespace (Configuration Manager Client)
     Get-CimInstance -Query "Select * From __Namespace Where Name='CCM'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
@@ -495,7 +532,21 @@ catch {
     $errorCount++
 }
 
-# STEPS 8-9: Final completion and error reporting
+# STEP 8: Configure post-reboot SCCM reinstallation
+# Set up RunOnce registry key to trigger SCCM reinstall task after system reboots
+Write-LogMessage -Level Info -Message "(Step 8 of 10) Configuring post-reboot SCCM reinstallation."
+try {
+    # Create RunOnce registry entry to trigger the Reinstall-SCCMTask scheduled task after reboot
+    # This ensures SCCM gets reinstalled automatically when the system comes back online
+    $runOnceCommand = 'schtasks.exe /Run /TN "Reinstall-SCCMTask"'
+    Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "TriggerSCCMReinstall" -Value $runOnceCommand -Type String
+    Write-LogMessage -Level Success -Message "RunOnce registry key created to trigger SCCM reinstall after reboot."
+} catch {
+    Write-LogMessage -Level Error -Message "Failed to create RunOnce registry key: $_"
+    $errorCount++
+}
+
+# STEP 9: Final completion and error reporting
 # Report overall success and any non-critical errors encountered
 Write-LogMessage -Level Success -Message "$cleanupDescription completed successfully."
 
@@ -504,3 +555,14 @@ Write-LogMessage -Level Success -Message "$cleanupDescription completed successf
 if ( $errorCount -gt 0 ){
     Write-LogMessage -Level Warning -Message "There were $errorCount non-critical errors."
 }
+
+# STEP 10: Initiate system reboot to complete SCCM removal and trigger reinstall
+# The system will reboot and the RunOnce key will automatically trigger SCCM reinstallation
+Write-LogMessage -Level Info -Message "(Step 10 of 10) Initiating system reboot to complete SCCM removal process."
+Write-LogMessage -Level Warning -Message "System will reboot. SCCM will be automatically reinstalled after reboot."
+
+# Provide brief delay to allow log messages to be written and visible
+Start-Sleep -Seconds 5
+
+# Force reboot with 0-second delay, because rebooting at 4am
+shutdown.exe /r /t 0 /f
