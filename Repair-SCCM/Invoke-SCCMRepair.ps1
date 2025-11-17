@@ -517,7 +517,14 @@ foreach ( $t in $targets ){
         $cpDestination = "\\$t\c$\drivers\ccm\ccmsetup"
         $localDestPath = "C:\Drivers\ccm\ccmsetup"
 
-        Write-LogMessage -Level Default -Message "Copying installation files from: $cpSource"
+        Write-LogMessage -Level Default -Message "Testing connection to $cpsource"
+        if (Test-Path $cpSource){
+            Write-LogMessage -Level Default -Message "Path to source files validated."
+        }
+        else {
+            throw "SCCM distribution point source not reachable: $cpSource"
+        }
+        
         Write-LogMessage -Level Default -Message "Destination: $localDestPath on $t"
         
         # Remove destination directory if it exists to delete any old install files
@@ -528,13 +535,42 @@ foreach ( $t in $targets ){
         # Create destination directory
         New-Item $cpDestination -Force -ItemType Directory | Out-Null
         
-        Write-LogMessage -Level Success -Message "Prepared destination directory on $t"
+        Write-LogMessage -Level Success -Message "Created destination directory on $t"
 
         # Copy SCCM installation files from distribution point to target computer
         # This includes ccmsetup.exe and all required client installation files
+        # Using Robocopy for improved performance and reliability with large files
+        
+        # OLD METHOD (commented out - had "write protected" issues):
+        # Copy-Item $cpSource $cpDestination -Force -Recurse -ErrorAction Stop
+        
         try {
-            Copy-Item $cpSource $cpDestination -Force -Recurse -ErrorAction Stop            
-            Write-LogMessage -Level Success -Message "SCCM installation files copied successfully to $t"
+            # Robocopy arguments for optimal performance and reliability
+            # Copy directly to the original destination path structure
+            $robocopyArgs = @(
+                "`"$cpSource`""
+                "`"$cpDestination`""
+                "/E"          # Copy subdirectories including empty ones
+                "/R:3"        # Retry 3 times on failed copies
+                "/W:5"        # Wait 5 seconds between retries
+                #"/NP"         # No progress indicator (cleaner output)
+                "/NFL"        # No file list (reduce log noise)
+                "/NDL"        # No directory list (reduce log noise)
+                "/MT:8"       # Multi-threaded copy (8 threads for performance)
+            )
+            
+            Write-LogMessage -Level Default -Message "Starting Robocopy file transfer..."
+            Write-LogMessage -Level Default -Message "Command: robocopy $($robocopyArgs -join ' ')"
+            
+            # Execute Robocopy
+            $robocopyResult = Start-Process -FilePath "robocopy.exe" -ArgumentList $robocopyArgs -Wait -PassThru -NoNewWindow
+            
+            # Robocopy exit codes: 0 = no files copied, 1 = files copied successfully, 2+ = errors
+            if ($robocopyResult.ExitCode -le 1) {
+                Write-LogMessage -Level Success -Message "SCCM installation files copied successfully to $t using Robocopy (Exit Code: $($robocopyResult.ExitCode))"
+            } else {
+                throw "Robocopy failed with exit code: $($robocopyResult.ExitCode)"
+            }
         }
         catch {
             Write-LogMessage -Level Error -Message "Failed to copy SCCM installation files to $t. Error: $_"
