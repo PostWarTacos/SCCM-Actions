@@ -517,9 +517,9 @@ foreach ( $t in $targets ){
         $cpDestination = "\\$t\c$\drivers\ccm\ccmsetup"
         $localDestPath = "C:\Drivers\ccm\ccmsetup"
 
-        Write-LogMessage -Level Default -Message "Testing connection to $cpsource"
-        if (Test-Path $cpSource){
-            Write-LogMessage -Level Default -Message "Path to source files validated."
+        Write-LogMessage -Level Default -Message "Testing connection to $cpSource"
+        if (Test-Path $cpSource) {
+            Write-LogMessage -Level Success -Message "Path to source files validated."
         }
         else {
             throw "SCCM distribution point source not reachable: $cpSource"
@@ -530,11 +530,31 @@ foreach ( $t in $targets ){
         # Remove destination directory if it exists to delete any old install files
         if (Test-Path $cpDestination) {
             Write-LogMessage -Level Warning -Message "Removing existing destination directory on $t to delete any old install files."
-            Remove-Item $cpDestination -Force -Recurse
+            try {
+                Invoke-Command -ComputerName $t -ScriptBlock {Remove-Item $localDestPath -Force -Recurse -ErrorAction Stop}
+                if (-not (Test-Path $cpDestination)) {
+                    Write-LogMessage -Level Success -Message "$localDestPath directory removed on $t."
+                }
+                else {
+                    Write-LogMessage -Level Error -Message "Failed to remove $localDestPath directory on $t. Directory still exists after removal attempt."
+                    throw "Directory removal failed"
+                }
+            }
+            catch {
+                Write-LogMessage -Level Error -Message "Error removing $localDestPath directory on $t`: $($_.Exception.Message)"
+                throw $_
+            }
         }
         # Create destination directory
         New-Item $cpDestination -Force -ItemType Directory | Out-Null
         
+        if (Test-Path $cpDestination) {
+            Write-LogMessage -Level Success -Message "Path to Destination location validated."
+        }
+        else {
+            throw "Destination location not reachable: $cpDestination"
+        }
+
         Write-LogMessage -Level Success -Message "Created destination directory on $t"
 
         # Copy SCCM installation files from distribution point to target computer
@@ -553,7 +573,7 @@ foreach ( $t in $targets ){
                 "/E"          # Copy subdirectories including empty ones
                 "/R:3"        # Retry 3 times on failed copies
                 "/W:5"        # Wait 5 seconds between retries
-                #"/NP"         # No progress indicator (cleaner output)
+                "/NP"         # No progress indicator (cleaner output)
                 "/NFL"        # No file list (reduce log noise)
                 "/NDL"        # No directory list (reduce log noise)
                 "/MT:8"       # Multi-threaded copy (8 threads for performance)
