@@ -378,6 +378,13 @@ $desktop = [Environment]::GetFolderPath('Desktop')
 $remediationSuccess = Join-Path $desktop "success.txt"
 $remediationFail = Join-Path $desktop "fail.txt"
 
+if (Test-Path $remediationSuccess){
+    '' | Out-File $remediationSuccess -Encoding utf8 -Force
+}
+if (Test-Path $remediationFail){
+    '' | Out-File $remediationFail -Encoding utf8 -Force
+}
+
 # Determine target computers from parameter or file selection
 if ($PipelineComputers.Count -gt 0) {
     # Use computers provided via parameter or pipeline
