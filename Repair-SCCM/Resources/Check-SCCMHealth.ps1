@@ -14,6 +14,11 @@ param(
     [bool]$ConsoleOutput = $false
 )
 
+# Detect if script is run via Invoke-SCCMRepair.ps1 and set ConsoleOutput accordingly
+if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1') {
+    $ConsoleOutput = $true
+}
+
 #====================
 # VARIABLES AND MKDIR
 #====================
