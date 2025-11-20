@@ -379,10 +379,10 @@ $remediationSuccess = Join-Path $desktop "success.txt"
 $remediationFail = Join-Path $desktop "fail.txt"
 
 if (Test-Path $remediationSuccess){
-    '' | Out-File $remediationSuccess -Encoding utf8 -Force
+    Remove-Item $remediationSuccess -Force
 }
 if (Test-Path $remediationFail){
-    '' | Out-File $remediationFail -Encoding utf8 -Force
+    Remove-Item $remediationFail -Force
 }
 
 # Determine target computers from parameter or file selection
@@ -495,11 +495,29 @@ foreach ( $t in $targets ){
     try {
         # Execute removal script to completely uninstall existing SCCM client
         # This ensures a clean slate for the subsequent reinstallation
-        Invoke-Command -ComputerName $t -FilePath $removeScript -ErrorAction Stop
-        Write-LogMessage -Level Success -Message "SCCM client removal completed successfully on $t"
+        $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ErrorAction Stop
+        
+        # Check removal results based on exit codes:
+        # 102 = Quick fix successful (Step 1 resolved issues)
+        # 0 = Full removal completed successfully  
+        # 1 = Full removal failed (too many errors)
+        if ($removalResult -eq 102) {
+            Write-LogMessage -Level Success -Message "SCCM client quick fix successful on $t. Skipping full remediation."
+            "$t - Success: Quick fix resolved SCCM issues" | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
+            continue
+        }
+        elseif ($removalResult -eq 0 -or [string]::IsNullOrEmpty($removalResult)) {
+            Write-LogMessage -Level Success -Message "SCCM client removal completed successfully on $t"
+        }
+        else {
+            Write-LogMessage -Level Error -Message "SCCM client removal failed on $t (exit code: '$removalResult')"
+            "$t - Failed: SCCM client removal failed with errors" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+            continue
+        }
+        
     } catch {
         Write-LogMessage -Level Error -Message "Failed to execute SCCM removal script on $t. Error: $_"
-        "$t - Failed: SCCM client removal failed - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+        "$t - Failed: SCCM client removal execution failed - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
         continue
     }
 
@@ -536,9 +554,14 @@ foreach ( $t in $targets ){
         
         # Remove destination directory if it exists to delete any old install files
         if (Test-Path $cpDestination) {
-            Write-LogMessage -Level Warning -Message "Removing existing destination directory on $t to delete any old install files."
+            Write-LogMessage -Level Warning -Message "Removing existing destination directory on $t to delete any old CCM Setup files."
             try {
-                Invoke-Command -ComputerName $t -ScriptBlock {Remove-Item $localDestPath -Force -Recurse -ErrorAction Stop}
+                Invoke-Command -ComputerName $t -ScriptBlock {
+                    param($Path)
+                    if (Test-Path $Path){
+                        Remove-Item $Path -Force -Recurse -ErrorAction Stop
+                    }
+                } -ArgumentList $localDestPath
                 if (-not (Test-Path $cpDestination)) {
                     Write-LogMessage -Level Success -Message "$localDestPath directory removed on $t."
                 }
@@ -556,13 +579,11 @@ foreach ( $t in $targets ){
         New-Item $cpDestination -Force -ItemType Directory | Out-Null
         
         if (Test-Path $cpDestination) {
-            Write-LogMessage -Level Success -Message "Path to Destination location validated."
+            Write-LogMessage -Level Success -Message "Created destination directory on $t"
         }
         else {
             throw "Destination location not reachable: $cpDestination"
         }
-
-        Write-LogMessage -Level Success -Message "Created destination directory on $t"
 
         # Copy SCCM installation files from distribution point to target computer
         # This includes ccmsetup.exe and all required client installation files
@@ -619,7 +640,7 @@ foreach ( $t in $targets ){
     } catch {
         Write-LogMessage -Level Error -Message "Failed to download SCCM installation files on $t. Error: $_"
         "$t - Failed: File download error - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-        exit 1
+        continue
     }
     Pause
 
