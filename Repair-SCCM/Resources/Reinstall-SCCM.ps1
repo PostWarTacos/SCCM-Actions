@@ -406,16 +406,30 @@ try {
     }
 
     # Final validation and return appropriate exit code
-    if ( -not $success ) {
-        Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
-        return "FAILED: SCCM reinstall or health check failed. Review logs on local machine."
+    if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1' -or $env:RUNNING_SCHEDULEDTASK) {
+        if ( -not $success ) {
+            Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
+            exit 201
+        } else {
+            Write-LogMessage -Level Success -Message "SCCM reinstall and health check passed."
+            exit 0
+        }
     } else {
-        Write-LogMessage -Level Success -Message "SCCM reinstall and health check passed."
-        return "SUCCESS: SCCM reinstall and health check passed."
+        if ( -not $success ) {
+            Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
+            return "FAILED: SCCM reinstall or health check failed. Review logs on local machine."
+        } else {
+            Write-LogMessage -Level Success -Message "SCCM reinstall and health check passed."
+            return "SUCCESS: SCCM reinstall and health check passed."
+        }
     }
 }
 catch {
     Write-LogMessage -Level Error -Message "Exception occurred in SCCM reinstall script: $_"
-    return "FAILED: Exception occurred during SCCM reinstall. Review logs on local machine."
+    if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1' -or $env:RUNNING_SCHEDULEDTASK) {
+        exit 1
+    } else {
+        return "FAILED: Exception occurred during SCCM reinstall. Review logs on local machine."
+    }
 }
 

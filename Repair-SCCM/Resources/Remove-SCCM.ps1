@@ -604,15 +604,29 @@ try {
     }
 
     # Return appropriate exit code based on removal results
-    if ($errorCount -gt 5) {
-        Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
-        return "FAILED: SCCM removal encountered $errorCount errors. Review logs on local machine."
+    if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1' -or $env:RUNNING_SCHEDULEDTASK) {
+        if ($errorCount -gt 5) {
+            Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
+            exit 1
+        } else {
+            Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount non-critical errors."
+            exit 0
+        }
     } else {
-        Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount non-critical errors."
-        return "SUCCESS: SCCM removal completed. $errorCount non-critical errors."
+        if ($errorCount -gt 5) {
+            Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
+            return "FAILED: SCCM removal encountered $errorCount errors. Review logs on local machine."
+        } else {
+            Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount non-critical errors."
+            return "SUCCESS: SCCM removal completed. $errorCount non-critical errors."
+        }
     }
 } catch {
     Write-LogMessage -Level Error -Message "Exception occurred: $_"
-    return "FAILED: Exception occurred during SCCM removal. Review logs on local machine."
+    if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1' -or $env:RUNNING_SCHEDULEDTASK) {
+        exit 1
+    } else {
+        return "FAILED: Exception occurred during SCCM removal. Review logs on local machine."
+    }
 }
 
