@@ -289,6 +289,61 @@ $isInteractive = Test-InteractiveSession
 
 Write-LogMessage -Level Info -Message "Starting SCCM reinstallation for site code: $SiteCode"
 Write-LogMessage -Level Info -Message "Session Mode: $(if ($isInteractive) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
+
+# -------------------- FIX WINDOWS INSTALLER -------------------- #
+Write-LogMessage -Level Info -Message "(Step 0 of 3) Verifying Windows Installer service."
+
+# Test if Windows Installer is working properly
+$msiNeedsRepair = $false
+try {
+    $testResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/?" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+    if ($testResult.ExitCode -ne 0) {
+        Write-LogMessage -Level Warning -Message "Windows Installer test failed. Will attempt repair."
+        $msiNeedsRepair = $true
+    } else {
+        Write-LogMessage -Level Success -Message "Windows Installer is functioning correctly."
+    }
+}
+catch {
+    Write-LogMessage -Level Warning -Message "Windows Installer test encountered error. Will attempt repair."
+    $msiNeedsRepair = $true
+}
+
+# Repair Windows Installer if needed
+if ($msiNeedsRepair) {
+    Write-LogMessage -Level Info -Message "Repairing Windows Installer service..."
+    try {
+        # Stop Windows Installer service
+        Write-LogMessage -Level Info -Message "Stopping Windows Installer service..."
+        Stop-Service -Name msiserver -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        
+        # Re-register Windows Installer COM components
+        Write-LogMessage -Level Info -Message "Re-registering Windows Installer COM components..."
+        $regResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/unregister" -Wait -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+        $regResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/regserver" -Wait -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+        
+        # Start Windows Installer service
+        Write-LogMessage -Level Info -Message "Starting Windows Installer service..."
+        Start-Service -Name msiserver -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        
+        # Verify service is running
+        $msiService = Get-Service -Name msiserver
+        if ($msiService.Status -eq 'Running') {
+            Write-LogMessage -Level Success -Message "Windows Installer service repaired successfully."
+        } else {
+            throw "Windows Installer service failed to start after re-registration."
+        }
+    }
+    catch {
+        Write-LogMessage -Level Error -Message "Failed to repair Windows Installer: $_"
+        Write-LogMessage -Level Warning -Message "Continuing with installation attempt anyway..."
+    }
+}
+
 Write-LogMessage -Level Info -Message "(Step 1 of 3) Attempting reinstall."
 try {
     # Configure installation parameters based on site code
