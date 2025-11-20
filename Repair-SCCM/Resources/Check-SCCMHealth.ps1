@@ -309,7 +309,17 @@ if ( $ccmEvalResults ) {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: $( $ccmEvalResults )." ) | Out-Null
     $corruption.Add("Corruption in Eval log.") | Out-Null
 } else {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client passed health check per CCMEval logs." ) | Out-Null
+    # Check why CCMEval results are empty - could indicate missing SCCM installation
+    if (-not (Test-Path $ccmEvalLogPath)) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log not found. SCCM may not be installed or functioning." ) | Out-Null
+        $corruption.Add("CCMEval log missing.") | Out-Null
+    } elseif (-not (Test-Path "C:\Windows\ccm\CcmEval.exe")) {
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmEval.exe not found. SCCM installation incomplete." ) | Out-Null
+        $corruption.Add("CcmEval.exe missing.") | Out-Null
+    } else {
+        # Log exists but no recent errors found - this could be genuinely healthy
+        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log exists but no recent errors found in last 7 days." ) | Out-Null
+    }
 }
 
 #===============
