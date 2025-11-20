@@ -296,7 +296,8 @@ try {
     if ( $SiteCode -eq "DDS") {
         # Note: Commented line shows full parameter set for future reference
         #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:SCANZ223 FSP=VOTCZ223" -PassThru -Verbose
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -PassThru
+        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose
+        #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -PassThru
     }
     # PCI site installation with site code specification
     elseif ( $SiteCode -eq "PCI" ) {
