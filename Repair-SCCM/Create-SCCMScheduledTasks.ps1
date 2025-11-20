@@ -151,7 +151,7 @@ if(Get-ScheduledTask -TaskName Check-SCCMHealthTask){
 # Create Remove-SCCM Task
 #=============================
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedRemove"
+    -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedRemove -Interactive $false"
 
 $desc = "This task will only run when manually triggered. When run, it will execute a script that removes the SCCM client from the machine."
 
