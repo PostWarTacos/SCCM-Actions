@@ -579,13 +579,11 @@ foreach ( $t in $targets ){
         New-Item $cpDestination -Force -ItemType Directory | Out-Null
         
         if (Test-Path $cpDestination) {
-            Write-LogMessage -Level Success -Message "Path to Destination location validated."
+            Write-LogMessage -Level Success -Message "Created destination directory on $t"
         }
         else {
             throw "Destination location not reachable: $cpDestination"
         }
-
-        Write-LogMessage -Level Success -Message "Created destination directory on $t"
 
         # Copy SCCM installation files from distribution point to target computer
         # This includes ccmsetup.exe and all required client installation files
