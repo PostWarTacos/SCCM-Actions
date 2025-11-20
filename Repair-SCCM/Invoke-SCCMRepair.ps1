@@ -108,7 +108,9 @@
 param(
     [Parameter(Mandatory = $false, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Position = 0)]
     [Alias('Computer', 'Computers', 'CN')]
-    [string[]]$ComputerName
+    [string[]]$ComputerName,
+    [Parameter(Mandatory = $false)]
+    [bool]$Console = $false
 )
 
 begin {
@@ -178,9 +180,9 @@ Function Write-LogMessage {
         [Parameter(Mandatory)]
         [ValidateSet("Default", "Info", "Warning", "Error", "Success")]
         [string]$Level,
-        
         [Parameter(Mandatory)]
-        [string]$Message
+        [string]$Message,
+        [bool]$Console = $Console
     )
     
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -195,16 +197,23 @@ Function Write-LogMessage {
     }
     
     # Build the log entry
-    $logEntry = "[$timestamp] $prefix $Message"
-
-    # Console output with colors
-    switch ($Level) {
-        "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
-        "Info"    { Write-Host $logEntry -ForegroundColor White }
-        "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
-        "Error"   { Write-Host $logEntry -ForegroundColor Red }
-        "Success" { Write-Host $logEntry -ForegroundColor Green }
+    if (-not $prefix) {
+        $logEntry = "[$timestamp] $Message"
+    } else {
+        $logEntry = "[$timestamp] $prefix $Message"
     }
+    
+    # Console output with colors
+    if ($Console) {
+        switch ($Level) {
+            "Default" { Write-Host $logEntry -ForegroundColor White }
+            "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
+            "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
+            "Error"   { Write-Host $logEntry -ForegroundColor Red }
+            "Success" { Write-Host $logEntry -ForegroundColor Green }
+        }
+    }
+    $logEntry | Out-File -FilePath $global:remediationLog -Append -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 
 <#
@@ -385,6 +394,19 @@ if (Test-Path $remediationFail){
     Remove-Item $remediationFail -Force
 }
 
+# Define flags for resource scripts
+$ConsoleOutput = $Console   # Use script parameter for console output
+
+# Build argument lists for child scripts
+$HealthArgs = @()
+$RemoveArgs = @()
+$ReinstallArgs = @($siteCode)
+if ($ConsoleOutput) {
+    $HealthArgs += $ConsoleOutput
+    $RemoveArgs += $ConsoleOutput
+    $ReinstallArgs += $ConsoleOutput
+}
+
 # Determine target computers from parameter or file selection
 if ($PipelineComputers.Count -gt 0) {
     # Use computers provided via parameter or pipeline
@@ -470,7 +492,7 @@ foreach ( $t in $targets ){
     Write-LogMessage -Level Default -Message "Running SCCM health assessment on $t"
     try {
         # Execute health check script remotely to assess current SCCM client status
-        $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop
+        $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ArgumentList $HealthArgs -ErrorAction Stop
         
         # If SCCM client is already healthy, skip the entire remediation process
         if ($healthResult -eq $true -or $healthResult -like "*healthy*") {
@@ -495,7 +517,7 @@ foreach ( $t in $targets ){
     try {
         # Execute removal script to completely uninstall existing SCCM client
         # This ensures a clean slate for the subsequent reinstallation
-        $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ErrorAction Stop
+        $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ArgumentList $RemoveArgs -ErrorAction Stop
         
         # Check removal results based on exit codes:
         # 102 = Quick fix successful (Step 1 resolved issues)
@@ -642,7 +664,6 @@ foreach ( $t in $targets ){
         "$t - Failed: File download error - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
         continue
     }
-    Pause
 
     # ------------------------------------------------------------
     # STEP 4: Reboot and Wait for Connection
@@ -712,7 +733,7 @@ foreach ( $t in $targets ){
     try {
         # Execute reinstallation script with appropriate site code parameter
         # This script will use the previously downloaded installation files
-        Invoke-Command -ComputerName $t -FilePath $reinstallScript -ArgumentList $siteCode -ErrorAction Stop
+        Invoke-Command -ComputerName $t -FilePath $reinstallScript -ArgumentList $ReinstallArgs -ErrorAction Stop
         Write-LogMessage -Level Success -Message "SCCM client reinstallation completed successfully on $t (Site: $siteCode)"
     } catch {
         Write-LogMessage -Level Error -Message "Failed to execute SCCM reinstall script on $t. Error: $_"

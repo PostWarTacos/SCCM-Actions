@@ -8,6 +8,16 @@
 # VARIABLES AND MKDIR
 #====================
 
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $false)]
+    [bool]$ConsoleOutput = $false
+)
+
+#====================
+# VARIABLES AND MKDIR
+#====================
+
 $healthLog = [System.Collections.ArrayList]@()
 $corruption = [System.Collections.ArrayList]@()
 $healthLogPath = "C:\drivers\CCM\Logs\"
@@ -25,12 +35,15 @@ $clientPath = "C:\Windows\CCM\CcmExec.exe"
 try {
     if (Test-Path $clientPath) {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed.") | Out-Null
+            if ($ConsoleOutput) { Write-Host "Found CcmExec.exe. SCCM installed." }
     } else {
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
+            if ($ConsoleOutput) { Write-Host "Cannot find CcmExec.exe. SCCM Client is not installed." }
         $corruption.Add("CcmExec.exe missing.") | Out-Null
     }
 } catch {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
+        if ($ConsoleOutput) { Write-Host "Error checking CcmExec.exe: $_" }
     $corruption.Add("Error checking SCCM installation.") | Out-Null
 }
 				

@@ -40,7 +40,9 @@
 param(
     [Parameter(Mandatory=$true)]
     [ValidateSet("DDS", "PCI")]
-    [string]$SiteCode
+    [string]$SiteCode,
+    [Parameter(Mandatory = $false)]
+    [bool]$ConsoleOutput = $false
 )
 
 # -------------------- FUNCTIONS -------------------- #
@@ -164,8 +166,8 @@ Function Write-LogMessage {
         $logEntry = "[$timestamp] $prefix $Message"
     }
 
-    # Display console output with appropriate colors for each level (only when running interactively)
-    if ($isInteractive) {
+    # Display console output only if ConsoleOutput is true
+    if ($ConsoleOutput) {
         switch ($Level) {
             "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
             "Warning" { Write-Host $logEntry -ForegroundColor Yellow }

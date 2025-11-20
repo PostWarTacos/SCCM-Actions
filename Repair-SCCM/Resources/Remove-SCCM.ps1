@@ -55,6 +55,15 @@
     All actions are logged to both console and log file.
 #>
 
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $false)]
+    [bool]$NonInteractive = $false,
+    [Parameter(Mandatory = $false)]
+    [bool]$ConsoleOutput = $false
+)
+
 # ------------------- FUNCTIONS -------------------- #
 
 <#
@@ -228,8 +237,8 @@ Function Write-LogMessage {
         $logEntry = "[$timestamp] $prefix $Message"
     }
 
-    # Console output with colors (only display when running interactively)
-    if ($isInteractive) {
+    # Console output with colors (only if ConsoleOutput is true)
+    if ($ConsoleOutput) {
         switch ($Level) {
             "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
             "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
