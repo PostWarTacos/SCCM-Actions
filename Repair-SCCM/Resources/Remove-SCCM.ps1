@@ -368,22 +368,22 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
         $standardUninstallSucceeded = $true
     }
     catch {
-        Write-LogMessage -Level Warning -Message "Standard uninstall failed: $_ - Proceeding with force cleanup."
+        Write-LogMessage -Level Warning -Message "Standard uninstall failed: $_ - Proceeding with forced cleanup."
         $errorCount++
     }
 } else {
-    Write-LogMessage -Level Warning -Message "Ccmsetup.exe not found - Proceeding with force cleanup."
+    Write-LogMessage -Level Warning -Message "Ccmsetup.exe not found - Proceeding with forced cleanup."
 }
 
 # Determine cleanup approach based on standard uninstall success
 # If standard uninstall worked: perform gentle cleanup of remaining components
-# If standard uninstall failed: perform aggressive force removal
+# If standard uninstall failed: perform aggressive forced removal
 if ($standardUninstallSucceeded) {
     $cleanupMode = "cleanup"
     $cleanupDescription = "Performing post-uninstall cleanup"
 } else {
-    $cleanupMode = "force uninstall"
-    $cleanupDescription = "Performing force uninstall"
+    $cleanupMode = "forced uninstall"
+    $cleanupDescription = "Performing forced uninstall"
 }
 
 Write-LogMessage -Level Warning -Message "$cleanupDescription of any remaining SCCM components..."
@@ -572,5 +572,17 @@ if (-not $isInteractive) {
     Start-Sleep -Seconds 5
     
     # Force reboot with 0-second delay for unattended operation
-    shutdown.exe /r /t 0 /f
+    # shutdown.exe /r /t 0 /f
 }
+
+# Return appropriate exit code based on removal results
+if ($errorCount -gt 5) {
+    # Too many errors during removal - likely failed
+    Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
+    exit 1  # Failure exit code
+} else {
+    # Full removal completed successfully (or with only minor errors)
+    Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount errors"
+    exit 0  # Success exit code
+}
+
