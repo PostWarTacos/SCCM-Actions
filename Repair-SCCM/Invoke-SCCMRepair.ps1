@@ -12,7 +12,7 @@
     5. Reinstalling SCCM client with proper site configuration
     
     The script uses existing resource scripts via Invoke-Command -FilePath to execute
-    operations remotely on target machines. It provides detailed logging and handles
+    operations remotely on target machines in non-interactive PowerShell sessions (automation). It expects numeric exit codes from child scripts (0 for success, 1 for failure, etc.) to determine remediation results. It provides detailed logging and handles
     errors gracefully, maintaining success/failure tracking for all operations.
 
 .PARAMETER ComputerName

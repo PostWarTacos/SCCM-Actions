@@ -7,10 +7,23 @@
     It handles the installation process, waits for services to initialize, runs health checks,
     and verifies the client is functioning properly through comprehensive validation tests.
 
+    The script supports two key output modes:
+    - When run in a non-interactive PowerShell session (scheduled tasks, automation, or via Invoke-SCCMRepair.ps1), it uses exit codes (0 for success, 1 for failure).
+    - When run in an interactive PowerShell session (such as via Collection Commander or a user shell), it returns string results for status.
+
+    ConsoleOutput:
+    - Controls whether log messages are displayed in the console with color formatting.
+    - Automatically set to $true when run by Invoke-SCCMRepair.ps1.
+
 .PARAMETER SiteCode
     The SCCM site code for the installation. Valid values are:
     - DDS: Data Distribution Service site
     - PCI: Primary Care Interface site
+
+.PARAMETER ConsoleOutput
+    Controls whether log messages are displayed in the console with color formatting.
+    - $true: Console output enabled (default when run by Invoke-SCCMRepair.ps1)
+    - $false: Only file logging performed
 
 .EXAMPLE
     .\Reinstall-SCCM.ps1 -SiteCode "DDS"
@@ -23,15 +36,15 @@
 .NOTES
     File Name      : Reinstall-SCCM.ps1
     Version        : 1.3
-    Last Updated   : 2025-11-14
+    Last Updated   : 2025-11-20
     Author         : System Administrator
     Prerequisite   : Administrator privileges required
                    : SCCM setup files must be present in C:\drivers\ccm\ccmsetup\
-    
+
 .OUTPUTS
-    - Success: Returns 0 (implicit)
-    - Failure: Returns 201 for health check failures, or error object for installation failures
-    - Log files written to: C:\drivers\ccm\logs\HealthCheck.txt
+    - Interactive PowerShell session: Returns string status for Collection Commander and similar tools.
+    - Non-interactive session (scheduled/automated): Returns exit code (0 for success, 1 for failure) for automation and Invoke-SCCMRepair.ps1.
+    - All actions are logged to both console (if enabled) and log file.
 
 .LINK
     Related scripts: Check-SCCMHealth.ps1, Remove-SCCM.ps1

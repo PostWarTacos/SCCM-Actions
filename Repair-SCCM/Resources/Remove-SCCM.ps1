@@ -1,3 +1,4 @@
+
 <#
 .SYNOPSIS
     Removes and cleans up Microsoft SCCM (System Center Configuration Manager) client components.
@@ -5,7 +6,19 @@
 .DESCRIPTION
     This script performs a comprehensive removal of SCCM client components from a Windows system.
     It attempts a graceful uninstall first, followed by aggressive cleanup if needed.
-    
+
+    The script supports two key parameters for controlling output and execution mode:
+    - Interactive: Controls whether the script runs in an interactive PowerShell session (default: $true). When set to $false, the script runs in non-interactive mode (used for scheduled tasks and automation).
+    - ConsoleOutput: Controls whether log messages are displayed in the console with color formatting. This is automatically enabled when run by Invoke-SCCMRepair.ps1, or can be set manually.
+
+    Behavior by mode:
+    - Interactive ($true): Script runs in an interactive PowerShell session, displays progress, and returns string results. Use for Collection Commander or user shell.
+    - Interactive ($false): Script runs in a non-interactive session (scheduled tasks/automation), skips prompts, and will automatically reboot and trigger SCCM reinstall after cleanup. Returns exit codes for automation.
+
+    ConsoleOutput:
+    - When $true, log messages are shown in the console with color formatting. When $false, only file logging is performed.
+    - Automatically set to $true when run by Invoke-SCCMRepair.ps1.
+
     The script performs the following actions:
     1. Attempts to restart CcmExec service and remove SMS certificates (quick fix attempt)
     2. Performs standard SCCM uninstall using ccmsetup.exe
@@ -20,39 +33,44 @@
     11. Configures RunOnce registry key for automatic SCCM reinstall after reboot (non-interactive only)
     12. Initiates system reboot to complete removal and trigger automatic reinstallation (non-interactive only)
 
-.PARAMETER None
-    This script does not accept parameters.
+.PARAMETER Interactive
+    Controls whether the script runs in interactive/manual mode ($true) or non-interactive/automated mode ($false).
+    - $true: Prompts for input, manual reboot required, suitable for manual/Collection Commander runs.
+    - $false: No prompts, automatic reboot and reinstall, suitable for scheduled tasks and automation.
+
+.PARAMETER ConsoleOutput
+    Controls whether log messages are displayed in the console with color formatting.
+    - $true: Console output enabled (default when run by Invoke-SCCMRepair.ps1)
+    - $false: Only file logging performed
 
 .EXAMPLE
-    .\Remove-SCCM.ps1
-    
-    Runs the complete SCCM removal process with detailed logging.
+    .\Remove-SCCM.ps1 -Interactive $true
+    Runs the complete SCCM removal process interactively, with prompts and manual reboot.
+
+.EXAMPLE
+    .\Remove-SCCM.ps1 -Interactive $false
+    Runs the SCCM removal process in non-interactive mode, with automatic reboot and reinstall.
 
 .NOTES
     File Name      : Remove-SCCM.ps1
     Version        : 1.3
-    Last Updated   : 2025-11-14
+    Last Updated   : 2025-11-20
     Author         : System Administrator
     Prerequisite   : Administrator privileges required
-    
+
     WARNING: This script will completely remove SCCM client components.
-    When running non-interactively (scheduled task/service), it will automatically
-    reboot the system and configure automatic SCCM reinstallation.
-    
-    INTERACTIVE MODE: Manual execution - stops after cleanup, requires manual reboot
-    NON-INTERACTIVE MODE: Scheduled task/service - automatically reboots and reinstalls SCCM
-    
+    In non-interactive mode, the system will automatically reboot and configure SCCM reinstallation.
+
     Prerequisites for automatic reinstall (non-interactive mode):
     - "Reinstall-SCCMTask" scheduled task must exist (created by Create-SCCMScheduledTasks.ps1)
     - SCCM installation files must be available in C:\drivers\ccm\ccmsetup\
-    
+
     Log files are created at: C:\drivers\ccm\logs\HealthCheck.txt
 
 .OUTPUTS
-    Returns exit code 102 if quick fix (step 1) succeeds, otherwise continues full removal.
-    In non-interactive mode: System will automatically reboot after cleanup completion.
-    In interactive mode: Manual reboot required to complete the process.
-    All actions are logged to both console and log file.
+    - Interactive PowerShell session: Returns string status for Collection Commander and similar tools.
+    - Non-interactive session (scheduled/automated): Returns exit code (0 for success, 1 for failure, 102 for quick fix) for automation and Invoke-SCCMRepair.ps1.
+    - All actions are logged to both console (if enabled) and log file.
 #>
 
 

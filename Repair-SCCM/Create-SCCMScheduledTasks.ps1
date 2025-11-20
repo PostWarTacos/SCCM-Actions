@@ -1,5 +1,10 @@
 <#
-#   Intent: Creates a scheduled task that will run a script. Script is used to check the health of the SCCM client.
+<#
+#   Intent: Creates scheduled tasks that run SCCM resource scripts in non-interactive PowerShell sessions (automation). Scheduled tasks pass arguments like -Interactive $false to ensure scripts run in automation mode and return exit codes (0 for success, 1 for failure) for reliable status detection.
+#   Author: Matthew Wurtz
+#   Date: 28-Feb-25
+#   Updated: 20-Nov-25 - Clarified scheduled task mode and exit code handling in comments
+#>
 #   Author: Matthew Wurtz
 #   Date: 28-Feb-25
 #   Updated: 04-Nov-25 - Added function to encode scripts and updated to use actual script files
