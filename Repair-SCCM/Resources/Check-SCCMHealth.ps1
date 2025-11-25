@@ -43,7 +43,7 @@ try {
             if ($ConsoleOutput) { Write-Host "Found CcmExec.exe. SCCM installed." }
     } else {
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec.exe missing.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec.exe missing.'; Priority=1}
     }
 } catch {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
@@ -61,7 +61,7 @@ try {
     }
 } catch {
     $healthLog.Add("[$(get-date -Format \"dd-MMM-yy HH:mm:ss\")] Message: CcmExec service not found: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec service missing.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec service missing.'; Priority=3}
 }
 
 # Check Client Version
@@ -71,11 +71,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Version: $($smsClient.ClientVersion)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Client.ClientVersion is null or empty.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Client version not available.'}
+        $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Client version not available.'; Priority=50}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Client class: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='SMS_Client class inaccessible.'}
+    $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='SMS_Client class inaccessible.'; Priority=51}
 }    
 
 # Check Site Code
@@ -85,7 +85,7 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Site Code: $($mp.Name)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.Name is null or empty.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Site Code not available.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Site Code not available.'; Priority=4}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Authority class: $_") | Out-Null
@@ -99,11 +99,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client ID: $($ccmClient.ClientId)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCM_Client.ClientId is null or empty.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Client ID not available.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Client ID not available.'; Priority=6}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_Client class: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CCM_Client class inaccessible.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CCM_Client class inaccessible.'; Priority=7}
 }   
 
 # Check ClientSDK namespace for task sequence capability
@@ -113,11 +113,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible.") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible but no applications found.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace empty.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace empty.'; Priority=8}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing ClientSDK namespace: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace corrupt.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace corrupt.'; Priority=9}
 }
 
 # Check Policy namespace for task sequence policies
@@ -128,11 +128,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible. Found $policyCount task sequences.") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible but no task sequences found.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace empty.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace empty.'; Priority=10}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Policy namespace: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace corrupt.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace corrupt.'; Priority=11}
 }
 
 # Check SoftMgmtAgent namespace for execution tracking
@@ -151,7 +151,7 @@ try {
         # Note: Invalid class is often normal, so no corruption flag
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SoftMgmtAgent namespace: $_") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='SoftMgmtAgent namespace corrupt.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='SoftMgmtAgent namespace corrupt.'; Priority=12}
     }
 }
 
@@ -166,7 +166,7 @@ try {
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_TSExecutionRequest class: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='TS execution request class corrupt.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='TS execution request class corrupt.'; Priority=13}
 }
 
 # Check Management Point Communication
@@ -176,11 +176,11 @@ try {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Management Point: $($mp.CurrentManagementPoint)") | Out-Null
     } else {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.CurrentManagementPoint is null or empty.") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point not available.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point not available.'; Priority=14}
     }
 } catch {
     $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Management Point information: $_") | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point information inaccessible.'}
+    $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point information inaccessible.'; Priority=15}
 }
 
 #================
@@ -323,66 +323,39 @@ if ( $ccmEvalResults ) {
     
     # Outputs all fail messages within last week to healthcheck.txt
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: $( $ccmEvalResults )." ) | Out-Null
-    $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Corruption in Eval log.'}
+    $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Corruption in Eval log.'; Priority=53}
 } else {
     # Check why CCMEval results are empty - could indicate missing SCCM installation
     if (-not (Test-Path $ccmEvalLogPath)) {
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log not found. SCCM may not be installed or functioning." ) | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='CCMEval log missing.'}
+        $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='CCMEval log missing.'; Priority=52}
     } elseif (-not (Test-Path "C:\Windows\ccm\CcmEval.exe")) {
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmEval.exe not found. SCCM installation incomplete." ) | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmEval.exe missing.'}
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmEval.exe missing.'; Priority=18}
     } else {
         # Log exists but no recent errors found - this could be genuinely healthy
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log exists but no recent errors found in last 7 days." ) | Out-Null
     }
 }
 
-#===============
-# REPORT RESULTS (PRIORITIZED)
-#===============
 
-function Get-SeverityRank {
-    param($severity)
-    switch ($severity) {
-        'Critical' { return 1 }
-        'Warning' { return 2 }
-        'Informational' { return 3 }
-        default { return 99 }
-    }
-}
-
+#===============
+# REPORT RESULTS (NUMBERED PRIORITY)
+#===============
 
 if ($healthMessages.Count -eq 0) {
     $results = "Healthy Client"
 } elseif ($healthMessages.Count -eq 1) {
-    # Single issue, check for Eval log and $failMsg
     if ($healthMessages[0].Message -eq "Corruption in Eval log." -and $failMsg) {
         $results = "Corrupt Client. $failMsg"
     } else {
-        $results = "Corrupt Client. [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
+        $results = "Corrupt Client. [Priority $($healthMessages[0].Priority)] [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
     }
 } else {
-    $sortedMessages = $healthMessages | Sort-Object @{Expression={Get-SeverityRank $_.Severity}}, @{Expression={$_.Message}}
-    $hasEvalError = $healthMessages | Where-Object { $_.Message -eq "Corruption in Eval log." }
-    if (-not $hasEvalError) {
-        # No eval error, show most critical + count
-        $mostCritical = $sortedMessages[0]
-        $additionalCount = $healthMessages.Count - 1
-        $results = "Corrupt Client. [$($mostCritical.Severity)] $($mostCritical.Message) (+ $additionalCount more issues in log)"
-    } else {
-        # Has eval error, find most recent non-eval error
-        $nonEvalMessages = $sortedMessages | Where-Object { $_.Message -ne "Corruption in Eval log." }
-        if ($nonEvalMessages.Count -gt 0) {
-            $mostRecentNonEval = $nonEvalMessages[0]
-            $additionalCount = $healthMessages.Count - 1
-            $results = "Corrupt Client. [$($mostRecentNonEval.Severity)] $($mostRecentNonEval.Message) (+ $additionalCount more issues in log)"
-        } elseif ($failMsg) {
-            $results = "Corrupt Client. $failMsg"
-        } else {
-            $results = "Corrupt Client. Corruption in Eval log."
-        }
-    }
+    $sortedMessages = $healthMessages | Sort-Object Priority, Severity, Message # Sorted in ascending priority order,
+    $topError = $sortedMessages[0]
+    $additionalCount = $healthMessages.Count - 1
+    $results = "Corrupt Client. [Priority $($topError.Priority)] [$($topError.Severity)] $($topError.Message) (+ $additionalCount more issues in log)"
 }
 
 if ( -not ( Test-Path $healthLogPath )){
