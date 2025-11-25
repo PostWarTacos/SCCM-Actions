@@ -1,4 +1,3 @@
-
 <#
 .SYNOPSIS
     Removes and cleans up Microsoft SCCM (System Center Configuration Manager) client components.
@@ -283,9 +282,15 @@ if ($found) {
                     }
                 } else {
                     Write-LogMessage -Level Error -Message "Failed to start service. Proceeding with SCCM Client removal."
+                    if (-not $Invoke) {
+                        Write-Output "Step 1 - Quick Fix Failed. Proceeding with SCCM Client removal." # Output for Collection Commander
+                    }
                 }
             } catch {
                 Write-LogMessage -Level Warning -Message "Could not read PolicyAgent.log: $($_.Exception.Message). Skipping log check."
+                if (-not $Invoke) {
+                    Write-Output "Step 1 - PolicyAgent.log not readable. Skipping log check." # Output for Collection Commander
+                }
             }
         } else {
             Write-LogMessage -Level Warning -Message "PolicyAgent.log not found. Skipping log check."
