@@ -175,29 +175,35 @@ Function Get-FileName() {
 Function Write-LogMessage {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [ValidateSet("Default", "Info", "Warning", "Error", "Success")]
+        [Parameter(Position=0, Mandatory)]
+        [string]$Message,
+        [Parameter(Position=1)]
+        [ValidateSet("Info", "Warning", "Error", "Success", "Default")]
         [string]$Level,
-        
-        [Parameter(Mandatory)]
-        [string]$Message
+        [string]$LogFile = "$healthLogPath\HealthCheck.txt"
     )
     
+    # Generate timestamp for log entry
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     
-    # Add level-specific prefixes
-    $prefix = switch ($Level) {
-        "Default" { "[*]" }
-        "Info"    { "[*]" }
-        "Warning" { "[!]" }
-        "Error"   { "[!!!]" }
-        "Success" { "[+]" }
+    # Add level-specific prefixes for visual identification    
+    if ($Level) {
+        $prefix = switch ($Level) {
+            "Info"    { "[*]" }     # Informational messages
+            "Warning" { "[!]" }     # Warning messages  
+            "Error"   { "[!!!]" }   # Error messages
+            "Success" { "[+]" }     # Success messages
+        }
     }
+    else {
+        $prefix = "[*]" # Default prefix for unspecified level
+        $Level = "Default"
+    }
+
     
-    # Build the log entry
     $logEntry = "[$timestamp] $prefix $Message"
 
-    # Console output with colors
+    # Display console output with appropriate colors for each level (only when running interactively)
     switch ($Level) {
         "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
         "Info"    { Write-Host $logEntry -ForegroundColor White }
@@ -205,6 +211,22 @@ Function Write-LogMessage {
         "Error"   { Write-Host $logEntry -ForegroundColor Red }
         "Success" { Write-Host $logEntry -ForegroundColor Green }
     }
+    
+    # Write to log file if specified
+    if ($LogFile) {
+        try {
+            $logEntry | Out-File -FilePath $LogFile -Append -ErrorAction Stop
+        } catch {
+            # Use Write-Warning to avoid recursion when logging fails
+            Write-Warning "Failed to write to log file: $($_.Exception.Message)"
+        }
+    }
+    
+    # Add to health log array for backward compatibility with existing code
+    if (-not $healthLog) {
+        $healthLog = [System.Collections.ArrayList]@()
+    }
+    $healthLog.Add($logEntry) | Out-Null
 }
 
 <#
@@ -320,9 +342,9 @@ function Get-SiteCode{
             Write-LogMessage -Level Warning -Message $reason
         }
         Write-LogMessage -Level Warning -Message "Unable to automatically determine SCCM site code."
-        Write-LogMessage -Level Default -Message "Known site codes:"
-        Write-LogMessage -Level Default -Message "  - DDS (for DDS domains)"
-        Write-LogMessage -Level Default -Message "  - PCI (for DPOS domains)"
+        Write-LogMessage -Message "Known site codes:"
+        Write-LogMessage -Message "  - DDS (for DDS domains)"
+        Write-LogMessage -Message "  - PCI (for DPOS domains)"
         
         do {
             $code = Get-UserInputWithTimeout -Prompt "Please enter the correct site code (DDS or PCI)" -TimeoutSeconds 10 -ValidValues @("DDS", "PCI", "DPOS")
@@ -399,7 +421,7 @@ if ($PipelineComputers.Count -gt 0) {
     
     # Load target computer names from selected file
     $targets = Get-Content $targetFile
-    Write-LogMessage -Level Default -Message "Loaded $($targets.Count) target computers from: $targetFile"
+    Write-LogMessage -Message "Loaded $($targets.Count) target computers from: $targetFile"
 }
 
 # Build full paths to required resource scripts in Resources subfolder
@@ -445,13 +467,13 @@ Write-LogMessage -Level Info -Message "Starting SCCM remediation process..."
 
 foreach ( $t in $targets ){
 
-    Write-LogMessage -Level Info -Message "============================================"
-    Write-LogMessage -Level Info -Message "Starting SCCM remediation on $t"
-    Write-LogMessage -Level Info -Message "============================================"
+    Write-LogMessage -message "============================================"
+    Write-LogMessage -message "Starting SCCM remediation on $t"
+    Write-LogMessage -message "============================================"
     
     # Validate network connectivity before attempting any remote operations
     # This prevents hanging on inaccessible machines
-    Write-LogMessage -Level Default -Message "Testing network connection to $t"
+    Write-LogMessage -message "Testing network connection to $t"
     if ( -not ( Test-Connection $t -Count 2 -Quiet )){
         Write-LogMessage -Level Warning -Message "Unable to connect to $t. Skipping to next computer."
         "$t - Failed: Network connectivity test failed" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
@@ -467,7 +489,7 @@ foreach ( $t in $targets ){
     # ------------------------------------------------------------
     
     Write-LogMessage -Level Info -Message "--- Step 1: Initial Health Check ---"
-    Write-LogMessage -Level Default -Message "Running SCCM health assessment on $t"
+    Write-LogMessage -message "Running SCCM health assessment on $t"
     try {
         # Execute health check script remotely to assess current SCCM client status
         $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop
@@ -483,7 +505,7 @@ foreach ( $t in $targets ){
         }
     } catch {
         Write-LogMessage -Level Error -Message "Initial health check failed on $t. Error: $_"
-        Write-LogMessage -Level Default -Message "Continuing with remediation despite health check failure"
+        Write-LogMessage -message "Continuing with remediation despite health check failure"
     }
 
     # ------------------------------------------------------------
@@ -491,32 +513,46 @@ foreach ( $t in $targets ){
     # ------------------------------------------------------------
 
     Write-LogMessage -Level Info -Message "--- Step 2: SCCM Client Removal ---"
-    Write-LogMessage -Level Default -Message "Removing existing SCCM client installation on $t"
+    Write-LogMessage -message "Removing existing SCCM client installation on $t"
     try {
         # Execute removal script to completely uninstall existing SCCM client
         # This ensures a clean slate for the subsequent reinstallation
-        $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ErrorAction Stop
+        $removalResult = Invoke-Command -ComputerName $t -FilePath $removeScript -ArgumentList '-Invoke' -ErrorAction Stop
         
         # Check removal results based on exit codes:
-        # 102 = Quick fix successful (Step 1 resolved issues)
-        # 0 = Full removal completed successfully  
-        # 1 = Full removal failed (too many errors)
-        if ($removalResult -eq 102) {
-            Write-LogMessage -Level Success -Message "SCCM client quick fix successful on $t. Skipping full remediation."
-            "$t - Success: Quick fix resolved SCCM issues" | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
-            continue
-        }
-        elseif ($removalResult -eq 0 -or [string]::IsNullOrEmpty($removalResult)) {
-            Write-LogMessage -Level Success -Message "SCCM client removal completed successfully on $t"
-        }
-        else {
-            Write-LogMessage -Level Error -Message "SCCM client removal failed on $t (exit code: '$removalResult')"
-            "$t - Failed: SCCM client removal failed with errors" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-            continue
+        # Accept new string return values from Remove-SCCM.ps1
+        switch ($removalResult) {
+            "QuickFixSuccess" {
+                Write-LogMessage -Level Success -Message "SCCM client quick fix successful on $t. Skipping full remediation."
+                "$t - Success: Quick fix resolved SCCM issues" | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
+                continue
+            }
+            "StandardUninstallSuccess" {
+                Write-LogMessage -Level Success -Message "SCCM client standard uninstall completed successfully on $t"
+            }
+            "RemovalSuccess" {
+                Write-LogMessage -Level Success -Message "SCCM client removal completed successfully on $t"
+            }
+            "RemovalFailed" {
+                Write-LogMessage -Level Error -Message "SCCM client removal failed on $t (status: '$removalResult')"
+                "$t - Failed: SCCM client removal failed with errors" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+                continue
+            }
+            "FatalError" {
+                Write-LogMessage -Level Error -Message "Fatal error during SCCM removal on $t"
+                "$t - Failed: Fatal error during SCCM removal" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+                continue
+            }
+            default {
+                Write-LogMessage -Level Warning -Message "Unknown removal result '$removalResult' on $t. Treating as failure."
+                "$t - Failed: Unknown removal result - $removalResult" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
+                continue
+            }
         }
         
     } catch {
         Write-LogMessage -Level Error -Message "Failed to execute SCCM removal script on $t. Error: $_"
+        write-host $removalResult
         "$t - Failed: SCCM client removal execution failed - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
         continue
     }
@@ -526,7 +562,7 @@ foreach ( $t in $targets ){
     # ------------------------------------------------------------
 
     Write-LogMessage -Level Info -Message "--- Step 3: Download SCCM Installation Files ---"
-    Write-LogMessage -Level Default -Message "Preparing SCCM installation files for $t"
+    Write-LogMessage -message "Preparing SCCM installation files for $t"
     try {
         # Determine source path based on SCCM site code
         # Each site has its own distribution point with site-specific client files
@@ -542,7 +578,7 @@ foreach ( $t in $targets ){
         $cpDestination = "\\$t\c$\drivers\ccm\ccmsetup"
         $localDestPath = "C:\Drivers\ccm\ccmsetup"
 
-        Write-LogMessage -Level Default -Message "Testing connection to $cpSource"
+        Write-LogMessage -message "Testing connection to $cpSource"
         if (Test-Path $cpSource) {
             Write-LogMessage -Level Success -Message "Path to source files validated."
         }
@@ -550,7 +586,7 @@ foreach ( $t in $targets ){
             throw "SCCM distribution point source not reachable: $cpSource"
         }
         
-        Write-LogMessage -Level Default -Message "Destination: $localDestPath on $t"
+        Write-LogMessage -message "Destination: $localDestPath on $t"
         
         # Remove destination directory if it exists to delete any old install files
         if (Test-Path $cpDestination) {
@@ -607,8 +643,8 @@ foreach ( $t in $targets ){
                 "/MT:8"       # Multi-threaded copy (8 threads for performance)
             )
             
-            Write-LogMessage -Level Default -Message "Starting Robocopy file transfer..."
-            Write-LogMessage -Level Default -Message "Command: robocopy $($robocopyArgs -join ' ')"
+            Write-LogMessage -message "Starting Robocopy file transfer..."
+            Write-LogMessage -message "Command: robocopy $($robocopyArgs -join ' ')"
             
             # Execute Robocopy
             $robocopyResult = Start-Process -FilePath "robocopy.exe" -ArgumentList $robocopyArgs -Wait -PassThru -NoNewWindow
@@ -642,14 +678,13 @@ foreach ( $t in $targets ){
         "$t - Failed: File download error - $_" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
         continue
     }
-    Pause
-
+    
     # ------------------------------------------------------------
     # STEP 4: Reboot and Wait for Connection
     # ------------------------------------------------------------
 
     Write-LogMessage -Level Info -Message "--- Step 4: System Reboot and Reconnection ---"
-    Write-LogMessage -Level Default -Message "Initiating system reboot on $t"
+    Write-LogMessage -Message "Initiating system reboot on $t"
     try {
         # Initiate immediate reboot on target computer
         # Reboot is necessary to clear any locked SCCM processes and ensure clean installation
@@ -657,7 +692,7 @@ foreach ( $t in $targets ){
         Write-LogMessage -Level Success -Message "Reboot command sent to $t"
         
         # Monitor system until it goes offline (indicates reboot has started)
-        Write-LogMessage -Level Default -Message "Waiting for $t to go offline (reboot initiation)..."
+        Write-LogMessage -message "Waiting for $t to go offline (reboot initiation)..."
         do {
             Start-Sleep -Seconds 5
             $offline = -not (Test-Connection $t -Count 1 -Quiet)
@@ -666,7 +701,7 @@ foreach ( $t in $targets ){
         Write-LogMessage -Level Success -Message "$t has gone offline - reboot initiated successfully"
         
         # Monitor system until it comes back online (indicates boot completion)
-        Write-LogMessage -Level Default -Message "Waiting for $t to come back online after reboot..."
+        Write-LogMessage -message "Waiting for $t to come back online after reboot..."
         $maxWaitTime = 600  # 10 minutes maximum wait time (configurable)
         $waitTime = 0
         $online = $false
@@ -678,7 +713,7 @@ foreach ( $t in $targets ){
             
             # Provide periodic status updates to user (every 60 seconds)
             if ($waitTime % 60 -eq 0) {
-                Write-LogMessage -Level Default -Message "Still waiting for $t to come online... ($waitTime seconds elapsed)"
+                Write-LogMessage -message "Still waiting for $t to come online... ($waitTime seconds elapsed)"
             }
             
         } while (-not $online -and $waitTime -lt $maxWaitTime)
@@ -688,7 +723,7 @@ foreach ( $t in $targets ){
             
             # Allow additional time for Windows services and processes to fully initialize
             # This prevents issues with PowerShell remoting and SCCM installation
-            Write-LogMessage -Level Default -Message "Waiting for system stabilization (60 seconds)..."
+            Write-LogMessage -message "Waiting for system stabilization (60 seconds)..."
             Start-Sleep -Seconds 60
             Write-LogMessage -Level Success -Message "System stabilization wait completed for $t"
         } else {
@@ -708,11 +743,11 @@ foreach ( $t in $targets ){
     # ------------------------------------------------------------
 
     Write-LogMessage -Level Info -Message "--- Step 5: SCCM Client Reinstallation ---"
-    Write-LogMessage -Level Default -Message "Installing fresh SCCM client on $t with site code: $siteCode"
+    Write-LogMessage -message "Installing fresh SCCM client on $t with site code: $siteCode"
     try {
         # Execute reinstallation script with appropriate site code parameter
         # This script will use the previously downloaded installation files
-        Invoke-Command -ComputerName $t -FilePath $reinstallScript -ArgumentList $siteCode -ErrorAction Stop
+        Invoke-Command -ComputerName $t -FilePath $reinstallScript -ArgumentList $siteCode, '-Invoke' -ErrorAction Stop
         Write-LogMessage -Level Success -Message "SCCM client reinstallation completed successfully on $t (Site: $siteCode)"
     } catch {
         Write-LogMessage -Level Error -Message "Failed to execute SCCM reinstall script on $t. Error: $_"
@@ -724,7 +759,7 @@ foreach ( $t in $targets ){
     # STEP 6: Record Results
     # ------------------------------------------------------------
 
-    Write-LogMessage -Level Info -Message "--- Step 6: Results Recording ---"
+    Write-LogMessage -message "--- Step 6: Results Recording ---"
 
     # Record successful completion of all remediation steps
     # Note: Individual resource scripts handle their own success/failure validation
@@ -739,14 +774,14 @@ foreach ( $t in $targets ){
 # Processing of all target computers has completed
 # Results have been written to desktop files for review
 
-Write-LogMessage -Level Success -Message "============================================"
-Write-LogMessage -Level Success -Message "SCCM Remediation Process Completed"
-Write-LogMessage -Level Success -Message "============================================"
+Write-LogMessage -message "============================================"
+Write-LogMessage -message "SCCM Remediation Process Completed"
+Write-LogMessage -message "============================================"
 
 # Display final results summary with file locations
-Write-LogMessage -Level Info -Message "Remediation Results Summary:"
-Write-LogMessage -Level Success -Message "  Successful computers logged to: $remediationSuccess"
-Write-LogMessage -Level Error -Message "  Failed computers logged to: $remediationFail"
+Write-LogMessage -message "Remediation Results Summary:"
+Write-LogMessage -message "  Successful computers logged to: $remediationSuccess"
+Write-LogMessage -message "  Failed computers logged to: $remediationFail"
 
 # Count results for final statistics
 $successCount = 0
@@ -760,12 +795,12 @@ if (Test-Path $remediationFail) {
     $failCount = (Get-Content $remediationFail).Count
 }
 
-Write-LogMessage -Level Info -Message "Final Statistics:"
-Write-LogMessage -Level Success -Message "  Successful: $successCount computers"
-Write-LogMessage -Level Error -Message "  Failed: $failCount computers"
-Write-LogMessage -Level Info -Message "  Total Processed: $($successCount + $failCount) computers"
+Write-LogMessage -message "Final Statistics:"
+Write-LogMessage -message "  Successful: $successCount computers"
+Write-LogMessage -message "  Failed: $failCount computers"
+Write-LogMessage -message "  Total Processed: $($successCount + $failCount) computers"
 
-Write-LogMessage -Level Info -Message "Review the result files on your desktop for detailed information."
-Write-LogMessage -Level Success -Message "SCCM remediation script execution complete."
+Write-LogMessage -message "Review the result files on your desktop for detailed information."
+Write-LogMessage -message "SCCM remediation script execution complete."
 
 } # End of 'end' block
