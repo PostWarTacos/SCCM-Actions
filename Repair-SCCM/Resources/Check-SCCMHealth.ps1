@@ -349,13 +349,13 @@ if ($healthMessages.Count -eq 0) {
     if ($healthMessages[0].Message -eq "Corruption in Eval log." -and $failMsg) {
         $results = "Corrupt Client. $failMsg"
     } else {
-        $results = "Corrupt Client. [Priority $($healthMessages[0].Priority)] [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
+        $results = "Corrupt Client. [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
     }
 } else {
     $sortedMessages = $healthMessages | Sort-Object Priority, Severity, Message # Sorted in ascending priority order,
     $topError = $sortedMessages[0]
     $additionalCount = $healthMessages.Count - 1
-    $results = "Corrupt Client. [Priority $($topError.Priority)] [$($topError.Severity)] $($topError.Message) (+ $additionalCount more issues in log)"
+    $results = "Corrupt Client. [$($topError.Severity)] $($topError.Message) (+ $additionalCount more issues in log)"
 }
 
 if ( -not ( Test-Path $healthLogPath )){
