@@ -40,134 +40,48 @@
 param(
     [Parameter(Mandatory=$true)]
     [ValidateSet("DDS", "PCI")]
-    [string]$SiteCode
+    [string]$SiteCode,
+    [switch]$Invoke
 )
 
 # -------------------- FUNCTIONS -------------------- #
 
-<#
-.SYNOPSIS
-    Determines if the PowerShell session is running interactively or non-interactively.
-.DESCRIPTION
-    Checks if the PowerShell session is running interactively (manual execution)
-    or non-interactively (scheduled task, service, etc.). This affects how the
-    script handles user prompts and output display.
-    
-    The function detects non-interactive sessions by:
-    - Checking if parent process is svchost.exe (Task Scheduler service)
-    - Verifying if no console session exists (SESSIONNAME environment variable)
-    - Detecting if running in background/service context
-.OUTPUTS
-    Returns $true if session is interactive, $false if non-interactive
-.EXAMPLE
-    $isInteractive = Test-InteractiveSession
-    if ($isInteractive) {
-        # Show prompts and wait for user input
-    } else {
-        # Run silently without prompts
-    }
-#>
-function Test-InteractiveSession {
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param()
-    
-    try {
-        # Start with assumption that session is interactive
-        $isInteractive = $true
-        
-        # Get current process information
-        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
-        
-        if ($currentProcess) {
-            # Get parent process information
-            $parentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($currentProcess.ParentProcessId)" -ErrorAction SilentlyContinue
-            
-            # Check if parent process is svchost.exe (Task Scheduler service)
-            # or if no console session exists (SESSIONNAME environment variable is null)
-            if ($parentProcess -and ($parentProcess.Name -eq "svchost.exe" -or $env:SESSIONNAME -eq $null)) {
-                $isInteractive = $false
-            }
-            
-            # Additional checks for non-interactive contexts
-            if ($isInteractive) {
-                # Check if running in Windows Service context
-                if ($env:USERNAME -eq "SYSTEM" -or $env:USERNAME -eq "LOCAL SERVICE" -or $env:USERNAME -eq "NETWORK SERVICE") {
-                    $isInteractive = $false
-                }
-                
-                # Check if console host is available
-                try {
-                    [System.Console]::KeyAvailable | Out-Null
-                } catch {
-                    # If console is not available, likely non-interactive
-                    $isInteractive = $false
-                }
-            }
-        }
-        
-        return $isInteractive
-        
-    } catch {
-        # If detection fails, assume non-interactive to be safe
-        # This prevents hanging on prompts in automated environments
-        return $false
-    }
-}
-
-<#
-.SYNOPSIS
-    Writes formatted log messages to console and file with timestamp and level indicators.
-
-.DESCRIPTION
-    This function provides consistent logging across the script with color-coded console output
-    and file logging capabilities. Messages are timestamped and prefixed with level indicators.
-
-.PARAMETER Level
-    The severity level of the message (Info, Warning, Error, Success)
-
-.PARAMETER Message
-    The message content to log
-
-.PARAMETER LogFile
-    Optional path to log file. Defaults to the health log path.
-#>
 Function Write-LogMessage {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [ValidateSet("Info", "Warning", "Error", "Success")]
-        [string]$Level,
-        
-        [Parameter(Mandatory)]
+        [Parameter(Position=0, Mandatory)]
         [string]$Message,
-        
+        [Parameter(Position=1)]
+        [ValidateSet("Info", "Warning", "Error", "Success", "Default")]
+        [string]$Level,
         [string]$LogFile = "$healthLogPath\HealthCheck.txt"
     )
     
     # Generate timestamp for log entry
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     
-    # Add level-specific prefixes for visual identification
-    $prefix = switch ($Level) {
-        "Info"    { "[*]" }      # Informational messages
-        "Warning" { "[!]" }      # Warning messages  
-        "Error"   { "[!!!]" }    # Error messages
-        "Success" { "[+]" }      # Success messages
-    }
-    
-    # Build the complete log entry with timestamp and prefix
-    if (-not $prefix) {
-        $logEntry = "[$timestamp] $Message"
+    # Add level-specific prefixes for visual identification    
+    if ($Level) {
+        $prefix = switch ($Level) {
+            "Info"    { "[*]" }     # Informational messages
+            "Warning" { "[!]" }     # Warning messages  
+            "Error"   { "[!!!]" }   # Error messages
+            "Success" { "[+]" }     # Success messages
+        }
     }
     else {
-        $logEntry = "[$timestamp] $prefix $Message"
+        $prefix = "[*]" # Default prefix for unspecified level
+        $Level = "Default"
     }
+
+    
+    $logEntry = "[$timestamp] $prefix $Message"
 
     # Display console output with appropriate colors for each level (only when running interactively)
     if ($isInteractive) {
         switch ($Level) {
-            "Info"    { Write-Host $logEntry -ForegroundColor Cyan }
+            "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
+            "Info"    { Write-Host $logEntry -ForegroundColor White }
             "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
             "Error"   { Write-Host $logEntry -ForegroundColor Red }
             "Success" { Write-Host $logEntry -ForegroundColor Green }
@@ -177,7 +91,7 @@ Function Write-LogMessage {
     # Write to log file if specified
     if ($LogFile) {
         try {
-            $logEntry | Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction Stop
+            $logEntry | Out-File -FilePath $LogFile -Append -ErrorAction Stop
         } catch {
             # Use Write-Warning to avoid recursion when logging fails
             Write-Warning "Failed to write to log file: $($_.Exception.Message)"
@@ -185,24 +99,12 @@ Function Write-LogMessage {
     }
     
     # Add to health log array for backward compatibility with existing code
+    if (-not $healthLog) {
+        $healthLog = [System.Collections.ArrayList]@()
+    }
     $healthLog.Add($logEntry) | Out-Null
 }
 
-<#
-.SYNOPSIS
-    Performs comprehensive health checks on the SCCM client installation. Slimmed down version of Check-SCCMHealth.ps1.
-
-.DESCRIPTION
-    This function validates multiple aspects of SCCM client health including:
-    - Client executable presence
-    - Service status
-    - Client version information
-    - Management point connectivity
-    - Client ID assignment
-
-.OUTPUTS
-    Returns $true if all health checks pass, $false otherwise
-#>
 function Test-HealthCheck {
     
     # Initialize success flag - will be set to false if any check fails
@@ -248,10 +150,12 @@ function Test-HealthCheck {
 
     # Verify unique client identifier is properly assigned
     $ccmClient = Get-CimInstance -Namespace "root\ccm" -ClassName CCM_Client -ErrorAction SilentlyContinue
-    if ( $ccmClient.ClientId ) {
+    if ($ccmClient.ClientId) {
         Write-LogMessage -Level Success -Message "SCCM Client Client ID found: $($ccmClient.ClientId)"
+        $clientIdFound = $true
     } else {
         Write-LogMessage -Level Error -Message "Client Id property not found."
+        $clientIdFound = $false
         $allPassed = $false
     }
 
@@ -282,26 +186,44 @@ $localInstallerPath = "C:\drivers\ccm\ccmsetup" # Location of SCCM installation 
 # Site code configuration (passed as mandatory parameter from calling script)
 # Valid values: DDS (Data Distribution Service) or PCI (Primary Care Interface)
 
-# Session detection - determines if running interactively or as scheduled task
-$isInteractive = Test-InteractiveSession
-
 # -------------------- REINSTALL SCCM -------------------- #
 
-Write-LogMessage -Level Info -Message "Starting SCCM reinstallation for site code: $SiteCode"
-Write-LogMessage -Level Info -Message "Session Mode: $(if ($isInteractive) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
+Write-LogMessage -message "Starting SCCM reinstallation for site code: $SiteCode"
+Write-LogMessage -message "Session Mode: $(if ($Invoke) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
 
 # -------------------- FIX WINDOWS INSTALLER -------------------- #
-Write-LogMessage -Level Info -Message "(Step 0 of 3) Verifying Windows Installer service."
+Write-LogMessage -message "(Step 1 of 4) Verifying Windows Installer service."
 
 # Test if Windows Installer is working properly
 $msiNeedsRepair = $false
 try {
-    $testResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/?" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-    if ($testResult.ExitCode -ne 0) {
-        Write-LogMessage -Level Warning -Message "Windows Installer test failed. Will attempt repair."
-        $msiNeedsRepair = $true
+    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/?" -PassThru -WindowStyle Hidden -ErrorAction Stop
+    $timeoutSeconds = 30
+    $elapsed = 0
+    $pollInterval = 1
+    $exited = $false
+    while ($elapsed -lt $timeoutSeconds) {
+        if ($proc.HasExited) {
+            $exited = $true
+            break
+        }
+        Start-Sleep -Seconds $pollInterval
+        $elapsed += $pollInterval
+    }
+    if ($exited) {
+        if ($proc.ExitCode -ne 0) {
+            Write-LogMessage -Level Warning -Message "Windows Installer test failed. Will attempt repair."
+            $msiNeedsRepair = $true
+        } else {
+            Write-LogMessage -Level Success -Message "Windows Installer is functioning correctly."
+        }
     } else {
-        Write-LogMessage -Level Success -Message "Windows Installer is functioning correctly."
+        try {
+            $proc.Kill()
+        } catch {
+            }
+        Write-LogMessage -Level Warning -Message "Windows Installer test timed out. Will attempt repair."
+        $msiNeedsRepair = $true
     }
 }
 catch {
@@ -311,22 +233,25 @@ catch {
 
 # Repair Windows Installer if needed
 if ($msiNeedsRepair) {
-    Write-LogMessage -Level Info -Message "Repairing Windows Installer service..."
+    Write-LogMessage -message "Repairing Windows Installer service..."
+    if (-not $Invoke) {
+        Write-Output "Attempting Windows Installer repair."  # Output for Collection Commander
+    }
     try {
         # Stop Windows Installer service
-        Write-LogMessage -Level Info -Message "Stopping Windows Installer service..."
+        Write-LogMessage -message "Stopping Windows Installer service..."
         Stop-Service -Name msiserver -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         
         # Re-register Windows Installer COM components
-        Write-LogMessage -Level Info -Message "Re-registering Windows Installer COM components..."
+        Write-LogMessage -message "Re-registering Windows Installer COM components..."
         $regResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/unregister" -Wait -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 2
         $regResult = Start-Process -FilePath "msiexec.exe" -ArgumentList "/regserver" -Wait -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 2
         
         # Start Windows Installer service
-        Write-LogMessage -Level Info -Message "Starting Windows Installer service..."
+        Write-LogMessage -message "Starting Windows Installer service..."
         Start-Service -Name msiserver -ErrorAction Stop
         Start-Sleep -Seconds 3
         
@@ -334,32 +259,36 @@ if ($msiNeedsRepair) {
         $msiService = Get-Service -Name msiserver
         if ($msiService.Status -eq 'Running') {
             Write-LogMessage -Level Success -Message "Windows Installer service repaired successfully."
-        } else {
+            } else {
             throw "Windows Installer service failed to start after re-registration."
+        }
+        if (-not $Invoke){
+            Write-Output "Step 1 - Windows Installer repair succeeded."  # Output for Collection Commander
         }
     }
     catch {
         Write-LogMessage -Level Error -Message "Failed to repair Windows Installer: $_"
         Write-LogMessage -Level Warning -Message "Continuing with installation attempt anyway..."
+        if (-not $Invoke){
+            Write-Output "Step 1 - Windows Installer repair failed."  # Output for Collection Commander
+        }
     }
 }
 
-Write-LogMessage -Level Info -Message "(Step 1 of 3) Attempting reinstall."
+Write-LogMessage -message "(Step 2 of 4) Attempting reinstall."
 try {
     # Configure installation parameters based on site code
     # DDS site installation with simplified parameters
     if ( $SiteCode -eq "DDS") {
         # Note: Commented line shows full parameter set for future reference
-        #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:SCANZ223 FSP=VOTCZ223" -PassThru -Verbose
         $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose
-        #$proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -PassThru
     }
     # PCI site installation with site code specification
     elseif ( $SiteCode -eq "PCI" ) {
         $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose    
     }
        
-    # Wait for installation process to complete and validate exit code
+    # Wait for installation process to complete and vlidate exit code
     $proc.WaitForExit()
     if ( $proc.ExitCode -ne 0 ){
         throw "SCCM install failed with exit code $($proc.exitcode)"
@@ -367,37 +296,81 @@ try {
     Write-LogMessage -Level Success -Message "Reinstall complete."
     
     # Monitor service installation - ccmexec service creation can take time
-    Write-LogMessage -Level Info -Message "Waiting for service to be installed."
+    Write-LogMessage -message "Waiting for service to be installed."
+    if ($Host.Name -eq 'ConsoleHost') { return "ReinstallComplete" }
+    $ccmexecWaitCount = 0
     while ( -not ( Get-Service "ccmexec" -ErrorAction SilentlyContinue )) {
+        $ccmexecWaitCount++
         Start-Sleep -Seconds 120  # Check every 2 minutes
     }
     
     # Wait for service to reach running state before proceeding
-    Write-LogMessage -Level Info -Message "Waiting for service to show running."
+    Write-LogMessage -message "Waiting for service to show running."
+    $ccmexecRunWaitCount = 0
     while (( Get-Service "ccmexec").Status -ne "Running" ) {
+        $ccmexecRunWaitCount++
         Start-Sleep -Seconds 120  # Check every 2 minutes
+    }
+    if (-not $Invoke){
+        Write-Output "Step 2 - SCCM reinstall succeeded. Proceeding with health checks."  # Output for Collection Commander
     }
 }
 Catch{
     Write-LogMessage -Level Error -Message "Install failed. Caught error: $_"
+    if (-not $Invoke){
+        Write-Output "Step 2 - SCCM reinstall failed. Return $_"  # Output for Collection Commander
+    }
     return $_
 }
 
 # -------------------- REGISTER AND RUN CCMEVAL CHECK -------------------- #
 
-# Execute SCCM's built-in evaluation tool to perform initial client validation
-Write-LogMessage -Level Info -Message "(Step 2 of 3) Registering CcmEval. Running CcmEval check."
+    # Execute SCCM's built-in evaluation tool to perform initial client validation
+Write-LogMessage -message "(Step 3 of 4) Registering CcmEval. Running CcmEval check."
 C:\windows\ccm\CcmEval.exe /register  # Register CcmEval scheduled task
 C:\windows\ccm\CcmEval.exe /run       # Execute immediate evaluation
 
+# After running CcmEval, check ccmeval.log for registration failure and cross-validate
+$ccmevalLog = "C:\Windows\CCM\Logs\ccmeval.log"
+if (Test-Path $ccmevalLog) {
+    $ccmevalTail = Get-Content $ccmevalLog -Tail 40
+    $regFailLine = $ccmevalTail | Select-String -Pattern "Client registered check: FAILED"
+    if ($regFailLine) {
+        Write-LogMessage -Level Error -Message "CcmEval reported registration failure. Validating against previous health checks..."
+        if ($Host.Name -eq 'ConsoleHost') { return "CcmEvalFailed" }
+        if ($clientIdFound) {
+            Write-LogMessage -Level Info -Message "ClientId was found in health check, so registration may have succeeded after initial failure."
+        } else {
+            Write-LogMessage -Level Warning -Message "ClientId not found in health check. Pulling diagnostic logs for further analysis."
+            $cidLog = "C:\Windows\CCM\Logs\ClientIDManagerStartup.log"
+            $locLog = "C:\Windows\CCM\Logs\LocationServices.log"
+            if (Test-Path $cidLog) {
+                Write-LogMessage -Level Info -Message "Last 20 lines of ClientIDManagerStartup.log:"
+                Get-Content $cidLog -Tail 20 | ForEach-Object { Write-LogMessage -Level Info -Message $_ }
+            } else {
+                Write-LogMessage -Level Warning -Message "ClientIDManagerStartup.log not found."
+            }
+            if (Test-Path $locLog) {
+                Write-LogMessage -Level Info -Message "Last 20 lines of LocationServices.log:"
+                Get-Content $locLog -Tail 20 | ForEach-Object { Write-LogMessage -Level Info -Message $_ }
+            } else {
+                Write-LogMessage -Level Warning -Message "LocationServices.log not found."
+            }
+        }
+    }
+    if (-not $Invoke){
+        Write-Output "Step 3 - CcmEval check completed."  # Output for Collection Commander
+    }
+}
+
 # -------------------- RUN UNTIL ALL PASS OR TIMEOUT -------------------- #
-Write-LogMessage -Level Info -Message "(Step 3 of 3) Running custom health checks."
-Write-LogMessage -Level Info -Message "Pausing for 60 seconds before verifying client is operating correctly."
+Write-LogMessage -message "(Step 4 of 4) Running custom health checks."
+Write-LogMessage -message "Pausing for 60 seconds before verifying client is operating correctly."
 Start-Sleep -Seconds 60  # Allow time for client initialization after CcmEval
 
 # Retry loop for health validation with configurable attempts
 for ( $i = 1; $i -le $maxAttempts; $i++ ) {
-    Write-LogMessage -Level Info -Message "---- Health Check Attempt $i ----"
+    Write-LogMessage -message "---- Health Check Attempt $i ----"
 
     # Execute comprehensive health validation
     if ( Test-HealthCheck ) {
@@ -413,10 +386,23 @@ for ( $i = 1; $i -le $maxAttempts; $i++ ) {
 }
 
 # Final validation and return appropriate exit code
-if ( -not $success ) {
-    Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
-    return 201  # Custom exit code indicating health check failure
+if (-not $Invoke) {
+    # Collection Commander: Only return one status at end
+    if (-not $success) {
+        Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
+        return "Health Check Failed"
+    } else {
+        Write-LogMessage -Level Success -Message "All SCCM health checks passed!"
+        return "Reinstall Success"
+    }
+} else {
+    # Non-Collection Commander: preserve previous logic (multiple returns)
+    if (-not $success) {
+        Write-LogMessage -Level Error -Message "Health checks did not pass after $maxAttempts attempts."
+        return 1 # Indicate failure with exit code 1
+    } else {
+        Write-LogMessage -Level Success -Message "All SCCM health checks passed!"
+        return 0 # Implicit success return (exit code 0) if all health checks passed
+    }
 }
-
-# Implicit success return (exit code 0) if all health checks passed
 
