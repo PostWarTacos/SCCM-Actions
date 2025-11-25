@@ -8,6 +8,21 @@
 # VARIABLES AND MKDIR
 #====================
 
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $false)]
+    [bool]$ConsoleOutput = $false
+)
+
+# Detect if script is run via Invoke-SCCMRepair.ps1 and set ConsoleOutput accordingly
+if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1') {
+    $ConsoleOutput = $true
+}
+
+#====================
+# VARIABLES AND MKDIR
+#====================
+
 $healthLog = [System.Collections.ArrayList]@()
 $healthMessages = @()
 $healthLogPath = "C:\drivers\CCM\Logs\"
@@ -25,13 +40,24 @@ $clientPath = "C:\Windows\CCM\CcmExec.exe"
 try {
     if (Test-Path $clientPath) {
         $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed.") | Out-Null
+            if ($ConsoleOutput) { Write-Host "Found CcmExec.exe. SCCM installed." }
     } else {
         $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
+<<<<<<< HEAD
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec.exe missing.'}
     }
 } catch {
     $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Error checking SCCM installation.'}
+=======
+            if ($ConsoleOutput) { Write-Host "Cannot find CcmExec.exe. SCCM Client is not installed." }
+        $corruption.Add("CcmExec.exe missing.") | Out-Null
+    }
+} catch {
+    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
+        if ($ConsoleOutput) { Write-Host "Error checking CcmExec.exe: $_" }
+    $corruption.Add("Error checking SCCM installation.") | Out-Null
+>>>>>>> 2b54cceeb9b3428d88c5e1a5d3657b2c7b823a7d
 }
 				
 # Check if SCCM Client Service is running
