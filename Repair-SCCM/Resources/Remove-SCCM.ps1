@@ -233,8 +233,12 @@ if ( -not ( Test-Path $healthLogPath )) {
 # 11. Configure RunOnce registry key for automatic SCCM reinstall after reboot (non-interactive only)
 # 12. Initiate system reboot to complete SCCM removal and trigger automatic reinstallation (non-interactive only)
 
+if (-not $Invoke) {
+    Write-Output "Removal Initiated" # Output for Collection Commander
+}
+
 Write-LogMessage -message "Attempting repair actions on $(hostname)"
-Write-LogMessage -message "Session Mode: $(if ($Invoke) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
+Write-LogMessage -message "Session Mode: $(if ($Invoke) { 'Interactive' } else { 'Non-Interactive (Scheduled Task or Collection Commander)' })"
 
 # STEP 1: Quick fix attempt - often resolves SCCM client issues without full removal
 # This step tries to fix common SCCM problems by:
@@ -293,11 +297,19 @@ if ($found) {
                 return "Fatal Error" # Output for Collection Commander
             }
         } else {
-            Write-LogMessage -Level Error -Message "Non-fatal error: $($_.Exception.Message). Proceeding with SCCM Client removal ."
+            $message = "Non-fatal error: $($_.Exception.Message). Proceeding with SCCM Client removal ."
+            Write-LogMessage -Level Error -Message $message
+            if (-not $invoke){
+                Write-Output $message
+            }
         }
+        }
+    } else {
+    $message = "CcmExec Service not installed. Proceeding with remnants removal."
+    Write-LogMessage -Level Warning -Message $message
+    if (-not $invoke){
+        Write-Output $message
     }
-} else {
-    Write-LogMessage -Level Warning -Message "CcmExec Service not installed. Proceeding with remnants removal."
 }
 
 # STEP 2: Attempt standard SCCM uninstall using built-in ccmsetup.exe
@@ -332,13 +344,13 @@ if ($standardUninstallSucceeded) {
     $cleanupMode = "cleanup"
     $cleanupDescription = "Performing post-uninstall cleanup"
     if (-not $Invoke) {
-        Write-Output "Standard Uninstall Succeeded."  # Output for Collection Commander
+        Write-Output "Step 2 - Standard Uninstall Succeeded."  # Output for Collection Commander
     }
 } else {
     $cleanupMode = "forced uninstall"
     $cleanupDescription = "Performing forced uninstall"
     if (-not $Invoke) {
-        Write-Output "Standard Uninstall Failed. Proceeding with forced uninstall."  # Output for Collection Commander
+        Write-Output "Step 2 - Standard Uninstall Failed. Proceeding with forced uninstall."  # Output for Collection Commander
     }
 }
 
@@ -760,19 +772,23 @@ if ( $Invoke ) {
     # Non-Collection Commander: preserve previous logic (multiple returns)
     if ($errorCount -gt 5) {
         Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
+        Write-LogMessage -Message "Can be found at $healthLogPath`."
         return 1
     } else {
         Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount errors."
+        Write-LogMessage -Message "Can be found at $healthLogPath`."
         return 0
     }
 } else {
     # Collection Commander: Only return one status at end
     if ($errorCount -gt 5) {
         Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."
-        return "Removal Failed. $errorCount errors."
+        Write-LogMessage -Message "Can be found at $healthLogPath`."
+        return "Removal Failed. $errorCount errors. Logs found locally at $healthLogPath`."
     } else {
         Write-LogMessage -Level Success -Message "Full SCCM removal completed successfully. $errorCount errors"
-        return "Removal Succeeded. $errorCount errors."
+        Write-LogMessage -Message "Can be found at $healthLogPath`."
+        return "Removal Succeeded. $errorCount errors. Logs found locally at $healthLogPath`."
     }
 }
 
