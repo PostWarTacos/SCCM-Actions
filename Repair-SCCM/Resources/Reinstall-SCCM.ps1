@@ -49,7 +49,7 @@ param(
     [Parameter(Mandatory=$true)]
     [ValidateSet("DDS", "PCI")]
     [string]$SiteCode,
-    [switch]$Invoke
+    [bool]$Invoke = $false
 )
 
 # -------------------- FUNCTIONS -------------------- #
@@ -85,8 +85,8 @@ Function Write-LogMessage {
     
     $logEntry = "[$timestamp] $prefix $Message"
 
-    # Display console output with appropriate colors for each level (only when running interactively)
-    if ($Invoke) {
+    # Display console output with appropriate colors for each level (only when $Invoke switch is used)
+    if ($script:Invoke) {
         switch ($Level) {
             "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
             "Info"    { Write-Host $logEntry -ForegroundColor White }
@@ -105,12 +105,6 @@ Function Write-LogMessage {
             Write-Warning "Failed to write to log file: $($_.Exception.Message)"
         }
     }
-    
-    # Add to health log array for backward compatibility with existing code
-    if (-not $healthLog) {
-        $healthLog = [System.Collections.ArrayList]@()
-    }
-    $healthLog.Add($logEntry) | Out-Null
 }
 
 function Test-HealthCheck {
@@ -166,7 +160,7 @@ function Test-HealthCheck {
     }
 
     # Confirm management point FQDN is accessible and configured
-    if ( $mp.CurrentManagementPoint ) {
+    if ($mp.CurrentManagementPoint) {
         Write-LogMessage -Level Success -Message "SCCM Management Point found: $($mp.CurrentManagementPoint)"
     } else {
         Write-LogMessage -Level Error -Message "Management Point property not found."
@@ -177,9 +171,6 @@ function Test-HealthCheck {
 }
 
 # -------------------- VARIABLES -------------------- #
-
-# Initialize mutable array list for collecting log entries throughout execution
-$healthLog = [System.Collections.ArrayList]@()
 
 # Health check retry configuration
 $maxAttempts = 3        # Maximum number of health check attempts before giving up
@@ -197,91 +188,106 @@ $localInstallerPath = "C:\drivers\ccm\ccmsetup" # Location of SCCM installation 
 Write-LogMessage -message "Starting SCCM reinstallation for site code: $SiteCode"
 Write-LogMessage -message "Session Mode: $(if ($Invoke) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
 
-# -------------------- FIX WINDOWS INSTALLER -------------------- #
-Write-LogMessage -message "(Step 1 of 4) Verifying Windows Installer service."
+# -------------------- FIX WMI AND WINDOWS INSTALLER -------------------- #
+Write-LogMessage -message "(Step 1 of 5) Verifying and repairing WMI and Windows Installer services."
 
-# Test if Windows Installer is working properly
+# Always reset WMI repository before SCCM installation to prevent MOF compilation errors
+# WMI can appear healthy but still have corruption that breaks MOF compilation
+Write-LogMessage -message "Resetting WMI repository to ensure clean state for SCCM installation..."
+try {
+    # Stop WMI service
+    Write-LogMessage -message "Stopping WMI service..."
+    Stop-Service -Name Winmgmt -Force -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    
+    # Reset WMI repository
+    Write-LogMessage -message "Resetting WMI repository..."
+    $wmiadapPath = Join-Path $env:SystemRoot "System32\wbem\winmgmt.exe"
+    $resetProc = Start-Process -FilePath $wmiadapPath -ArgumentList "/resetrepository" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+    
+    if ($resetProc.ExitCode -eq 0) {
+        Write-LogMessage -Level Success -Message "WMI repository reset successfully."
+    } else {
+        Write-LogMessage -Level Warning -Message "WMI reset returned exit code: $($resetProc.ExitCode)"
+    }
+    
+    Start-Sleep -Seconds 3
+    
+    # Start WMI service
+    Write-LogMessage -message "Starting WMI service..."
+    Start-Service -Name Winmgmt -ErrorAction Stop
+    Start-Sleep -Seconds 5
+    
+    # Verify WMI is responsive
+    $wmiTest = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if ($wmiTest) {
+        Write-LogMessage -Level Success -Message "WMI service is running and responsive after reset."
+    } else {
+        Write-LogMessage -Level Warning -Message "WMI service started but query test failed."
+    }
+}
+catch {
+    Write-LogMessage -Level Error -Message "Failed to reset WMI: $_"
+    Write-LogMessage -Level Warning -Message "Continuing with installation attempt anyway..."
+}
+
+# Test Windows Installer service
+Write-LogMessage -message "Verifying Windows Installer service..."
 $msiNeedsRepair = $false
 try {
-    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/?" -PassThru -WindowStyle Hidden -ErrorAction Stop
-    $timeoutSeconds = 30
-    $elapsed = 0
-    $pollInterval = 1
-    $exited = $false
-    while ($elapsed -lt $timeoutSeconds) {
-        if ($proc.HasExited) {
-            $exited = $true
-            break
-        }
-        Start-Sleep -Seconds $pollInterval
-        $elapsed += $pollInterval
-    }
-    if ($exited) {
-        if ($proc.ExitCode -ne 0) {
-            Write-LogMessage -Level Warning -Message "Windows Installer test failed. Will attempt repair."
-            $msiNeedsRepair = $true
+    $msiService = Get-Service -Name msiserver -ErrorAction Stop
+    
+    if ($msiService.Status -in @('Running', 'Stopped') -and $msiService.StartType -ne 'Disabled') {
+        $msiexecPath = Join-Path $env:SystemRoot "System32\msiexec.exe"
+        if (Test-Path $msiexecPath) {
+            Write-LogMessage -Level Success -Message "Windows Installer service is accessible and healthy."
         } else {
-            Write-LogMessage -Level Success -Message "Windows Installer is functioning correctly."
+            Write-LogMessage -Level Warning -Message "msiexec.exe not found. Will attempt repair."
+            $msiNeedsRepair = $true
         }
     } else {
-        try {
-            $proc.Kill()
-        } catch {
-            }
-        Write-LogMessage -Level Warning -Message "Windows Installer test timed out. Will attempt repair."
+        Write-LogMessage -Level Warning -Message "Windows Installer service is in an unhealthy state. Will attempt repair."
         $msiNeedsRepair = $true
     }
 }
 catch {
-    Write-LogMessage -Level Warning -Message "Windows Installer test encountered error. Will attempt repair."
+    Write-LogMessage -Level Warning -Message "Windows Installer test encountered error: $_. Will attempt repair."
     $msiNeedsRepair = $true
 }
 
 # Repair Windows Installer if needed
 if ($msiNeedsRepair) {
     Write-LogMessage -message "Repairing Windows Installer service..."
-    if (-not $Invoke) {
-        Write-Output "Attempting Windows Installer repair."  # Output for Collection Commander
-    }
     try {
-        # Stop Windows Installer service
-        Write-LogMessage -message "Stopping Windows Installer service..."
         Stop-Service -Name msiserver -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         
-        # Re-register Windows Installer COM components
-        Write-LogMessage -message "Re-registering Windows Installer COM components..."
         Start-Process -FilePath "msiexec.exe" -ArgumentList "/unregister" -Wait -PassThru -WindowStyle Hidden | Out-Null
         Start-Sleep -Seconds 2
         Start-Process -FilePath "msiexec.exe" -ArgumentList "/regserver" -Wait -PassThru -WindowStyle Hidden | Out-Null
         Start-Sleep -Seconds 2
         
-        # Start Windows Installer service
-        Write-LogMessage -message "Starting Windows Installer service..."
         Start-Service -Name msiserver -ErrorAction Stop
         Start-Sleep -Seconds 3
         
-        # Verify service is running
         $msiService = Get-Service -Name msiserver
         if ($msiService.Status -eq 'Running') {
             Write-LogMessage -Level Success -Message "Windows Installer service repaired successfully."
-            } else {
+        } else {
             throw "Windows Installer service failed to start after re-registration."
-        }
-        if (-not $Invoke){
-            Write-Output "Step 1 - Windows Installer repair succeeded."  # Output for Collection Commander
         }
     }
     catch {
         Write-LogMessage -Level Error -Message "Failed to repair Windows Installer: $_"
         Write-LogMessage -Level Warning -Message "Continuing with installation attempt anyway..."
-        if (-not $Invoke){
-            Write-Output "Step 1 - Windows Installer repair failed."  # Output for Collection Commander
-        }
     }
 }
 
-Write-LogMessage -message "(Step 2 of 4) Attempting reinstall."
+if (-not $script:Invoke) {
+    Write-Output "Step 1 - WMI and Windows Installer repair completed."
+}
+
+Write-LogMessage -message "(Step 2 of 5) Attempting reinstall."
 try {
     # Configure installation parameters based on site code
     # DDS site installation with simplified parameters
@@ -305,25 +311,41 @@ try {
     Write-LogMessage -message "Waiting for service to be installed."
     if ($Host.Name -eq 'ConsoleHost') { return "ReinstallComplete" }
     $ccmexecWaitCount = 0
-    while ( -not ( Get-Service "ccmexec" -ErrorAction SilentlyContinue )) {
+    $maxServiceWaitAttempts = 15  # Wait up to 30 minutes (15 * 120 seconds)
+    while ( -not ( Get-Service "ccmexec" -ErrorAction SilentlyContinue ) -and $ccmexecWaitCount -lt $maxServiceWaitAttempts) {
         $ccmexecWaitCount++
+        Write-LogMessage -message "Service not yet installed. Waiting... (Attempt $ccmexecWaitCount of $maxServiceWaitAttempts)"
         Start-Sleep -Seconds 120  # Check every 2 minutes
+    }
+    
+    if (-not (Get-Service "ccmexec" -ErrorAction SilentlyContinue)) {
+        throw "SCCM service was not installed after waiting $($maxServiceWaitAttempts * 2) minutes."
     }
     
     # Wait for service to reach running state before proceeding
     Write-LogMessage -message "Waiting for service to show running."
     $ccmexecRunWaitCount = 0
-    while (( Get-Service "ccmexec").Status -ne "Running" ) {
+    $maxRunWaitAttempts = 15  # Wait up to 30 minutes
+    while ( (Get-Service "ccmexec" -ErrorAction SilentlyContinue).Status -ne "Running" -and $ccmexecRunWaitCount -lt $maxRunWaitAttempts) {
         $ccmexecRunWaitCount++
+        $currentStatus = (Get-Service "ccmexec" -ErrorAction SilentlyContinue).Status
+        Write-LogMessage -message "Service status: $currentStatus. Waiting for Running state... (Attempt $ccmexecRunWaitCount of $maxRunWaitAttempts)"
         Start-Sleep -Seconds 120  # Check every 2 minutes
     }
-    if (-not $Invoke){
+    
+    $finalStatus = (Get-Service "ccmexec" -ErrorAction SilentlyContinue).Status
+    if ($finalStatus -ne "Running") {
+        Write-LogMessage -Level Warning -Message "Service is in state: $finalStatus (not Running). Continuing anyway..."
+    } else {
+        Write-LogMessage -Level Success -Message "SCCM service is running."
+    }
+    if (-not $script:Invoke){
         Write-Output "Step 2 - SCCM reinstall succeeded. Proceeding with health checks."  # Output for Collection Commander
     }
 }
 Catch{
     Write-LogMessage -Level Error -Message "Install failed. Caught error: $_"
-    if (-not $Invoke){
+    if (-not $script:Invoke){
         Write-Output "Step 2 - SCCM reinstall failed. Return $_"  # Output for Collection Commander
     }
     return $_
@@ -332,7 +354,7 @@ Catch{
 # -------------------- REGISTER AND RUN CCMEVAL CHECK -------------------- #
 
     # Execute SCCM's built-in evaluation tool to perform initial client validation
-Write-LogMessage -message "(Step 3 of 4) Registering CcmEval. Running CcmEval check."
+Write-LogMessage -message "(Step 3 of 5) Registering CcmEval. Running CcmEval check."
 C:\windows\ccm\CcmEval.exe /register  # Register CcmEval scheduled task
 C:\windows\ccm\CcmEval.exe /run       # Execute immediate evaluation
 
@@ -364,15 +386,15 @@ if (Test-Path $ccmevalLog) {
             }
         }
     }
-    if (-not $Invoke){
+    if (-not $script:Invoke){
         Write-Output "Step 3 - CcmEval check completed."  # Output for Collection Commander
     }
 }
 
 # -------------------- RUN UNTIL ALL PASS OR TIMEOUT -------------------- #
-Write-LogMessage -message "(Step 4 of 4) Running custom health checks."
-Write-LogMessage -message "Pausing for 60 seconds before verifying client is operating correctly."
-Start-Sleep -Seconds 60  # Allow time for client initialization after CcmEval
+Write-LogMessage -message "(Step 4 of 5) Running custom health checks."
+Write-LogMessage -message "Pausing for 180 seconds (3 minutes) before verifying client is operating correctly."
+Start-Sleep -Seconds 180  # Allow time for client initialization after CcmEval
 
 # Retry loop for health validation with configurable attempts
 for ( $i = 1; $i -le $maxAttempts; $i++ ) {
