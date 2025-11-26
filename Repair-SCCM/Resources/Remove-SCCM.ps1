@@ -78,7 +78,7 @@
 
 # ------------------- PARAMETER BLOCK -------------------- #
 param(
-    [switch]$Invoke
+    [bool]$Invoke = $false
 )
 # ------------------- FUNCTIONS -------------------- #
 
@@ -113,8 +113,8 @@ Function Write-LogMessage {
     
     $logEntry = "[$timestamp] $prefix $Message"
 
-    # Display console output with appropriate colors for each level (only when running interactively)
-    if ($Invoke) {
+    # Display console output with appropriate colors for each level (only when $Invoke switch is used)
+    if ($script:Invoke) {
         switch ($Level) {
             "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
             "Info"    { Write-Host $logEntry -ForegroundColor White }
@@ -133,12 +133,6 @@ Function Write-LogMessage {
             Write-Warning "Failed to write to log file: $($_.Exception.Message)"
         }
     }
-    
-    # Add to health log array for backward compatibility with existing code
-    if (-not $healthLog) {
-        $healthLog = [System.Collections.ArrayList]@()
-    }
-    $healthLog.Add($logEntry) | Out-Null
 }
 
 Function Stop-ServiceWithTimeout {
@@ -196,10 +190,6 @@ Function Stop-ServiceWithTimeout {
 
 # ------------------- VARIABLES -------------------- #
 
-# Creates an Arraylist which is mutable and easier to manipulate than an array.
-# Used for backward compatibility with existing logging systems
-$healthLog = [System.Collections.ArrayList]@()
-
 # Error handling variables
 $errorCount = 0              # Track non-critical errors that don't stop execution
 # $critErrors = $false       # Reserved for future use
@@ -232,7 +222,7 @@ if ( -not ( Test-Path $healthLogPath )) {
 # 11. Configure RunOnce registry key for automatic SCCM reinstall after reboot (non-interactive only)
 # 12. Initiate system reboot to complete SCCM removal and trigger automatic reinstallation (non-interactive only)
 
-if (-not $Invoke) {
+if (-not $script:Invoke) {
     Write-Output "Removal Initiated" # Output for Collection Commander
 }
 
@@ -276,43 +266,43 @@ if ($found) {
                 )
                 $success = $recentLogs | Select-String -Pattern $patterns
                 if ($success) {
-                    Write-LogMessage -Level Success -Message "Service restarted successfully and MP contacted. Assuming resolved, ending script."
-                    if (-not $Invoke) { 
+                    Write-LogMessage -Message "Service restarted successfully and MP contacted. Assuming resolved, ending script." -Level Success
+                    if (-not $script:Invoke) { 
                         return "Quick Fix Success" # Output for Collection Commander
                     }
                 } else {
-                    Write-LogMessage -Level Error -Message "Failed to start service. Proceeding with SCCM Client removal."
-                    if (-not $Invoke) {
+                    Write-LogMessage -Message "Failed to start service. Proceeding with SCCM Client removal." -Level Error
+                    if (-not $script:Invoke) {
                         Write-Output "Step 1 - Quick Fix Failed. Proceeding with SCCM Client removal." # Output for Collection Commander
                     }
                 }
             } catch {
-                Write-LogMessage -Level Warning -Message "Could not read PolicyAgent.log: $($_.Exception.Message). Skipping log check."
-                if (-not $Invoke) {
+                Write-LogMessage -Message "Could not read PolicyAgent.log: $($_.Exception.Message). Skipping log check." -Level Warning
+                if (-not $script:Invoke) {
                     Write-Output "Step 1 - PolicyAgent.log not readable. Skipping log check." # Output for Collection Commander
                 }
             }
         } else {
-            Write-LogMessage -Level Warning -Message "PolicyAgent.log not found. Skipping log check."
+            Write-LogMessage -Message "PolicyAgent.log not found. Skipping log check." -Level Warning
         }
     } catch {
         if ($_.Exception.Message -match "network|connection|access denied|permission") {
-            Write-LogMessage -Level Error -Message "Fatal error encountered: $($_.Exception.Message). Halting execution."
-            if (-not $Invoke) {
+            Write-LogMessage -Message "Fatal error encountered: $($_.Exception.Message). Halting execution." -Level Error
+            if (-not $script:Invoke) {
                 return "Fatal Error" # Output for Collection Commander
             }
         } else {
             $message = "Non-fatal error: $($_.Exception.Message). Proceeding with SCCM Client removal ."
-            Write-LogMessage -Level Error -Message $message
-            if (-not $invoke){
+            Write-LogMessage -Message $message -Level Error
+            if (-not $script:Invoke){
                 Write-Output $message
             }
         }
         }
     } else {
     $message = "CcmExec Service not installed. Proceeding with remnants removal."
-    Write-LogMessage -Level Warning -Message $message
-    if (-not $invoke){
+    Write-LogMessage -Message $message -Level Warning
+    if (-not $script:Invoke){
         Write-Output $message
     }
 }
@@ -331,15 +321,15 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
         if ( $proc.ExitCode -ne 0 ){
             throw "SCCM uninstall failed with exit code $($proc.exitcode)"
         }
-        Write-LogMessage -Level Success -Message "Standard ccmsetup.exe uninstall completed successfully."
+        Write-LogMessage -Message "Standard ccmsetup.exe uninstall completed successfully." -Level Success
         $standardUninstallSucceeded = $true
     }
     catch {
-        Write-LogMessage -Level Warning -Message "Standard uninstall failed: $_ - Proceeding with forced cleanup."
+        Write-LogMessage -Message "Standard uninstall failed: $_ - Proceeding with forced cleanup." -Level Warning
         $errorCount++
     }
 } else {
-    Write-LogMessage -Level Warning -Message "Ccmsetup.exe not found - Proceeding with forced cleanup."
+    Write-LogMessage -Message "Ccmsetup.exe not found - Proceeding with forced cleanup." -Level Warning
 }
 
 # Determine cleanup approach based on standard uninstall success
@@ -348,18 +338,18 @@ if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
 if ($standardUninstallSucceeded) {
     $cleanupMode = "cleanup"
     $cleanupDescription = "Performing post-uninstall cleanup"
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 2 - Standard Uninstall Succeeded."  # Output for Collection Commander
     }
 } else {
     $cleanupMode = "forced uninstall"
     $cleanupDescription = "Performing forced uninstall"
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 2 - Standard Uninstall Failed. Proceeding with forced uninstall."  # Output for Collection Commander
     }
 }
 
-Write-LogMessage -message "$cleanupDescription of any remaining SCCM components..."
+Write-LogMessage -message "$cleanupDescription of any remaining SCCM components..." -Level Info
 
 # STEP 3: Remove SCCM Windows services
 # - ccmexec: Main SCCM client service ("SMS Agent Host")
@@ -372,74 +362,20 @@ $services = @(
 foreach ( $service in $services ){
     if ( get-service $service -ErrorAction SilentlyContinue ){
         try {
-            Stop-ServiceWithTimeout CcmExec
-            Write-LogMessage -Level Warning -Message "Removing SMS certs."
-            Get-ChildItem Cert:\LocalMachine\SMS | Remove-Item
-            Start-Service CcmExec -ErrorAction SilentlyContinue
-        
-            # Start service
-            Start-Sleep -Seconds 10 # Allow some time for the service to start
-        
-            # Trigger Machine Policy Retrieval & Evaluation Cycle to test MP connectivity
-            # Schedule ID {00000000-0000-0000-0000-000000000021} = Machine Policy Retrieval & Evaluation Cycle
-            Invoke-CimMethod -Namespace "root\ccm" -ClassName "SMS_Client" -MethodName "TriggerSchedule" -Arguments @{sScheduleID="{00000000-0000-0000-0000-000000000021}"} | Out-Null
-            
-            # Check PolicyAgent.log for success indicators
-            $policyAgentLogs = "C:\Windows\CCM\Logs\PolicyAgent.log"
-            $recentLogs = Get-Content $policyAgentLogs -Tail 50
-            
-            # Patterns that indicate successful SCCM client operation
-            $patterns = @(
-                "Updated namespace .* successfully",
-                "Successfully received policy assignments from MP",
-                "PolicyAgent successfully processed the policy assignment",
-                "Completed policy evaluation cycle"
-            )
-                                     
-            $success = $recentLogs | Select-String -Pattern $patterns
-            
-            # Announce success/fail
-            if ( $success ) {
-                Write-LogMessage -Level Success -Message "Service restarted successfully and MP contacted. Assuming resolved, ending script."
-                return 102
-            } else {
-                Write-LogMessage -Level Error -Message "Failed to start service. Continuing with SCCM Client removal and reinstall."
-            }   
+            Stop-ServiceWithTimeout $service
+            sc.exe delete $service | Out-Null
+            Write-LogMessage -Level Success -Message "$service service stopped and removed."
         }
         catch {
-               Write-LogMessage -Level Error -Message "Failed to start service. Continuing with SCCM Client removal and reinstall."
-        }
-    } Else {
-        Write-LogMessage -Level Warning -Message "CcmExec Service not installed. Continuing with SCCM Client removal and reinstall."
-    }
-
-    # STEP 2: Attempt standard SCCM uninstall using built-in ccmsetup.exe
-    # This is the preferred method as it follows Microsoft's recommended uninstall process
-    Write-LogMessage -Level Info -Message "(Step 2 of 12) Performing SCCM uninstall."
-    $standardUninstallSucceeded = $false
-
-    if ( Test-Path C:\Windows\ccmsetup\ccmsetup.exe ){
-        try {
-            Get-Service -Name CcmExec -ErrorAction SilentlyContinue | Stop-Service -Force
-            Get-Service -Name ccmsetup -ErrorAction SilentlyContinue | Stop-Service -Force
-            $proc = Start-Process -FilePath "C:\Windows\ccmsetup\ccmsetup.exe" -ArgumentList "/uninstall" -PassThru -Verbose
-            $proc.WaitForExit()
-            if ( $proc.ExitCode -ne 0 ){
-                throw "SCCM uninstall failed with exit code $($proc.exitcode)"
-            }
-            Write-LogMessage -Level Success -Message "Standard ccmsetup.exe uninstall completed successfully."
-            $standardUninstallSucceeded = $true
-        }
-        catch {
-            Write-LogMessage -Level Warning -Message "Standard uninstall failed: $_ - Proceeding with forced cleanup."
+            Write-LogMessage -Level Error -Message "Failed to remove $service service. Continuing script but may cause issues."
             $errorCount++
         }
     } else{
         Write-LogMessage -Level Warning -Message "$service service not found."
     }
-    if (-not $Invoke) {
-        Write-Output "Step 3 - Service Removal Completed" # Output for Collection Commander
-    }        
+}
+if (-not $script:Invoke) {
+    Write-Output "Step 3 - Service Removal Completed" # Output for Collection Commander
 }
 
 # STEP 4: Terminate any remaining SCCM-related processes
@@ -487,7 +423,7 @@ foreach ( $file in $files ){
             Write-LogMessage -Level Warning -Message "Error checking processes for $file. Continuing script."
         }
     }
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 4 - Process Termination Completed" # Output for Collection Commander
     }
 }
@@ -514,7 +450,7 @@ foreach ( $file in $files ){
     } else {
         Write-LogMessage -Level Warning -Message "$file not found. Skipping removal."
     }
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 5 - File Removal Completed" # Output for Collection Commander
     }
 }
@@ -563,7 +499,7 @@ foreach ( $key in $keys ){
     } else {
         Write-LogMessage -Level Warning -Message "Could not find $key. Skipping removal."
     }
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 6 - Reg Key Removal Completed" # Output for Collection Commander
     }
 }
@@ -586,7 +522,7 @@ try {
     Get-CimInstance -Query "Select * From __Namespace Where Name='sms'" -Namespace "root\cimv2" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
     
     Write-LogMessage -Level Success -Message "Namespace(s) found and removed."
-    if (-not $Invoke) {
+    if (-not $script:Invoke) {
         Write-Output "Step 7 - Namespace Removal Completed" # Output for Collection Commander
     }
 }
@@ -602,7 +538,7 @@ if (-not $standardUninstallSucceeded) {
     Write-LogMessage -message "(Step 8 of 12) Rebuilding WMI repository."
     try {
         Write-LogMessage -Level Warning -Message "Stopping WMI service..."
-        Stop-Service -Name winmgmt -Force -ErrorAction Stop
+        Stop-Service -Name winmgmt -Force -ErrorAction Stop | Out-Null
         Start-Sleep -Seconds 3
         
         Write-LogMessage -Level Info -Message "Resetting WMI repository..."
@@ -610,7 +546,7 @@ if (-not $standardUninstallSucceeded) {
         
         if ($wmgmtResult.ExitCode -eq 0) {
             Write-LogMessage -Level Success -Message "WMI repository reset successfully."
-            if (-not $Invoke) {
+            if (-not $script:Invoke) {
                 Write-Output "Step 8 - WMI Reset Success." # Output for Collection Commander
             }
         } else {
@@ -632,7 +568,7 @@ if (-not $standardUninstallSucceeded) {
     catch {
         Write-LogMessage -Level Error -Message "Failed to rebuild WMI repository: $($_.Exception.Message)"
         Write-LogMessage -Level Warning -Message "Continuing cleanup. WMI issues may require manual intervention."
-        if (-not $Invoke) {
+        if (-not $script:Invoke) {
             Write-Output "Step 8 - WMI Reset Failed. Proceeding with removal." # Output for Collection Commander
         }
         $errorCount++
@@ -644,11 +580,11 @@ if (-not $standardUninstallSucceeded) {
 # STEP 9: Remove SCCM from Windows Installer database (forced cleanup only)
 # After failed uninstalls, MSI database may still have SCCM product registrations
 # This prevents the installer from attempting repairs instead of fresh installs
-if (-not $forceCleanup) {
+if (-not $standardUninstallSucceeded) {
     Write-LogMessage -Level Info -Message "(Step 9 of 12) Removing SCCM from Windows Installer database."
     try {
         # Get all SCCM-related products from MSI database
-        Write-LogMessage -Level Info -Message "Searching for SCCM products in MSI database..."
+        Write-LogMessage -Message "Searching for SCCM products in MSI database..."
         $sccmProducts = Get-WmiObject -Class Win32_Product -ErrorAction SilentlyContinue | Where-Object { 
             $_.Name -like "*Configuration Manager*" -or 
             $_.Name -like "*CCM*" -or
@@ -659,37 +595,37 @@ if (-not $forceCleanup) {
             foreach ($product in $sccmProducts) {
                 Write-LogMessage -Level Info -Message "Uninstalling '$($product.Name)' (Product Code: $($product.IdentifyingNumber)) from MSI database..."
                 try {
-                    Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
-                    Write-LogMessage -Level Success -Message "$($proc.ProcessName) killed. Process was tied to $file."
+                    $product.Uninstall() | Out-Null
+                    Write-LogMessage -Level Success -Message "'$($product.Name)' uninstalled from MSI database."
                 }
                 catch {
-                    Write-LogMessage -Level Error -Message "Failed to kill $($proc.ProcessName) process. Continuing script but may cause issues."
+                    Write-LogMessage -Level Error -Message "Failed to uninstall '$($product.Name)': $($_.Exception.Message)"
                     $errorCount++
                 }
-            } else{
-                Write-LogMessage -Level Warning -Message "Could not find a process tied to $file."
             }
-        } catch {
-            Write-LogMessage -Level Warning -Message "Error checking processes for $file. Continuing script."
+        } else {
+            Write-LogMessage -Level Warning -Message "No SCCM products found in MSI database."
         }
-        if (-not $Invoke) {
+        if (-not $script:Invoke) {
             Write-Output "Step 9 - MSI Database Cleanup Completed." # Output for Collection Commander
         }
     }
     catch {
         Write-LogMessage -Level Error -Message "Failed to query/remove MSI database entries: $($_.Exception.Message)"
         Write-LogMessage -Level Warning -Message "Continuing cleanup. MSI database may still contain SCCM entries."
-        if (-not $Invoke) {
+        if (-not $script:Invoke) {
             Write-Output "Step 9 - MSI Database Cleanup Failed. Proceeding with removal." # Output for Collection Commander
         }
         $errorCount++
     }
+} else {
+    Write-LogMessage -Level Info -Message "(Step 9 of 12) Skipping MSI database cleanup (post-uninstall cleanup)."
 }
 
 ### STEP 10: Final completion and error reporting
 # Report overall success and any non-critical errors encountered
 Write-LogMessage -Level Success -Message "(Step 10 of 12) $cleanupDescription completed successfully."
-if( $Invoke ) {
+if( $script:Invoke ) {
     Write-LogMessage -Level Info -Message "Steps 11 and 12 will be skipped in interactive mode. They are executed via the parent script, Invoke-SCCMRepair.ps1."
 }
 
@@ -773,7 +709,7 @@ if (-not $isInteractive) {
 #>
 
 # Return appropriate exit code based on removal results
-if ( $Invoke ) {
+if ( $script:Invoke ) {
     # Non-Collection Commander: preserve previous logic (multiple returns)
     if ($errorCount -gt 5) {
         Write-LogMessage -Level Error -Message "Removal completed with $errorCount errors. This may indicate removal failure."

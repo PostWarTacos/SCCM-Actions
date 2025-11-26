@@ -108,8 +108,7 @@
 param(
     [Parameter(Mandatory = $false, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Position = 0)]
     [Alias('Computer', 'Computers', 'CN')]
-    [string[]]$ComputerName,
-    [Parameter(Mandatory = $false)]
+    [string[]]$ComputerName
 )
 
 begin {
@@ -128,6 +127,8 @@ end {
 
 #Requires -Version 5.0
 #Requires -RunAsAdministrator
+
+clear
 
 # -------------------- FUNCTIONS -------------------- #
 
@@ -222,12 +223,6 @@ Function Write-LogMessage {
             Write-Warning "Failed to write to log file: $($_.Exception.Message)"
         }
     }
-    
-    # Add to health log array for backward compatibility with existing code
-    if (-not $healthLog) {
-        $healthLog = [System.Collections.ArrayList]@()
-    }
-    $healthLog.Add($logEntry) | Out-Null
 }
 
 <#
@@ -414,8 +409,8 @@ Write-LogMessage -Level Success -Message "Using SCCM site code: $siteCode"
 
 # Build argument lists for child scripts
 $HealthArgs = @()
-$RemoveArgs = @('-invoke')
-$ReinstallArgs = @('-invoke', $siteCode)
+$RemoveArgs = @($true)
+$ReinstallArgs = @($siteCode, $true)
 
 # -------------------- PREPARATION -------------------- #
 # Determine target computers from parameter or file selection
@@ -497,21 +492,27 @@ foreach ( $t in $targets ){
     
     Write-LogMessage -Level Info -Message "--- Step 1: Initial Health Check ---"
     Write-LogMessage -message "Running SCCM health assessment on $t"
+    $healthResult = $null
     try {
         # Execute health check script remotely to assess current SCCM client status
-        $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ArgumentList $HealthArgs -ErrorAction Stop
-        
+        $healthResult = Invoke-Command -ComputerName $t -FilePath $healthCheckScript -ErrorAction Stop -ErrorVariable healthError
+              
         # If SCCM client is already healthy, skip the entire remediation process
-        if ($healthResult -eq $true -or $healthResult -like "*healthy*") {
+        if ($healthResult -like "*Healthy*") {
             Write-LogMessage -Level Success -Message "$t SCCM client is already healthy. Skipping remediation."
             "$t - Success: Already healthy, no remediation needed" | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
             continue
         }
         else {
-            Write-LogMessage -Level Warning -Message "$t SCCM client is unhealthy. Proceeding with full remediation."
+            Write-LogMessage -Level Error -Message "$t SCCM client is unhealthy. Proceeding with full remediation."
+            Write-LogMessage -Level Warning -Message "Health check returned: '$healthResult'"
         }
     } catch {
-        Write-LogMessage -Level Error -Message "Initial health check failed on $t. Error: $_"
+        Write-LogMessage -Level Error -Message "Initial health check failed on $t. Error: $($_.Exception.Message)"
+        Write-LogMessage -Level Error -Message "Error details: $($_.Exception.GetType().FullName)"
+        if ($_.Exception.InnerException) {
+            Write-LogMessage -Level Error -Message "Inner exception: $($_.Exception.InnerException.Message)"
+        }
         Write-LogMessage -message "Continuing with remediation despite health check failure"
     }
 
@@ -528,31 +529,20 @@ foreach ( $t in $targets ){
         
         # Check removal results based on exit codes:
         # Accept new string return values from Remove-SCCM.ps1
+        #write-host $removalResult
+        Write-Host $removalResult.GetType()
         switch ($removalResult) {
-            "QuickFixSuccess" {
+            "Quick Fix Success" {
                 Write-LogMessage -Level Success -Message "SCCM client quick fix successful on $t. Skipping full remediation."
                 "$t - Success: Quick fix resolved SCCM issues" | Out-File -Append -FilePath $remediationSuccess -Encoding UTF8
                 continue
             }
-            "StandardUninstallSuccess" {
-                Write-LogMessage -Level Success -Message "SCCM client standard uninstall completed successfully on $t"
-            }
-            "RemovalSuccess" {
+            "0" {
                 Write-LogMessage -Level Success -Message "SCCM client removal completed successfully on $t"
             }
-            "RemovalFailed" {
+            "1" {
                 Write-LogMessage -Level Error -Message "SCCM client removal failed on $t (status: '$removalResult')"
                 "$t - Failed: SCCM client removal failed with errors" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-                continue
-            }
-            "FatalError" {
-                Write-LogMessage -Level Error -Message "Fatal error during SCCM removal on $t"
-                "$t - Failed: Fatal error during SCCM removal" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
-                continue
-            }
-            default {
-                Write-LogMessage -Level Warning -Message "Unknown removal result '$removalResult' on $t. Treating as failure."
-                "$t - Failed: Unknown removal result - $removalResult" | Out-File -Append -FilePath $remediationFail -Encoding UTF8
                 continue
             }
         }

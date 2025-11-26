@@ -4,26 +4,62 @@
 #   Author: Matthew Wurtz
 #>
 
-#====================
-# VARIABLES AND MKDIR
-#====================
-
 [CmdletBinding()]
-param(
-    [Parameter(Mandatory = $false)]
-    [bool]$ConsoleOutput = $false
-)
+param()
 
-# Detect if script is run via Invoke-SCCMRepair.ps1 and set ConsoleOutput accordingly
-if ($MyInvocation.InvocationName -eq 'Invoke-SCCMRepair.ps1' -or $MyInvocation.MyCommand.Name -eq 'Invoke-SCCMRepair.ps1') {
-    $ConsoleOutput = $true
+# Set strict mode to catch errors early
+$ErrorActionPreference = 'Continue'
+
+# Embedded logging function
+function Write-LogMessage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position=0, Mandatory)]
+        [string]$Message,
+        [Parameter(Position=1)]
+        [ValidateSet("Info", "Warning", "Error", "Success", "Default")]
+        [string]$Level,
+        [string]$LogFile = "$global:healthLogPath\HealthCheck.txt"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    if ($Level) {
+        $prefix = switch ($Level) {
+            "Info"    { "[*]" }     # Informational messages
+            "Warning" { "[!]" }     # Warning messages  
+            "Error"   { "[!!!]" }   # Error messages
+            "Success" { "[+]" }     # Success messages
+        }
+    }
+    else {
+        $prefix = "[*]" # Default prefix for unspecified level
+        $Level = "Default"
+    }
+    $logEntry = "[$timestamp] $prefix $Message"
+    
+    # Only write to console if we're in an interactive session (not via Invoke-Command)
+    $isRemoteSession = [bool]$PSSenderInfo
+    if ($PSBoundParameters.ContainsKey('Level') -and -not $isRemoteSession) {
+        switch ($Level) {
+            "Default" { Write-Host $logEntry -ForegroundColor DarkGray }
+            "Info"    { Write-Host $logEntry -ForegroundColor White }
+            "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
+            "Error"   { Write-Host $logEntry -ForegroundColor Red }
+            "Success" { Write-Host $logEntry -ForegroundColor Green }
+        }
+    }
+    if ($LogFile) {
+        try {
+            $logEntry | Out-File -FilePath $LogFile -Append -ErrorAction Stop
+        } catch {
+            # Silently continue if log file write fails in remote session
+        }
+    }
 }
 
 #====================
 # VARIABLES AND MKDIR
 #====================
 
-$healthLog = [System.Collections.ArrayList]@()
 $healthMessages = @()
 $healthLogPath = "C:\drivers\CCM\Logs\"
 
@@ -35,18 +71,18 @@ If( -not ( Test-Path $healthLogPath )) {
 # HEALTH CHECK ACTIONS
 #=====================
 
+
 # Check if SCCM Client is installed
 $clientPath = "C:\Windows\CCM\CcmExec.exe"
 try {
     if (Test-Path $clientPath) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Found CcmExec.exe. SCCM installed.") | Out-Null
-            if ($ConsoleOutput) { Write-Host "Found CcmExec.exe. SCCM installed." }
+        Write-LogMessage -Message "Found CcmExec.exe. SCCM installed." -Level Info
     } else {
-        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Cannot find CcmExec.exe. SCCM Client is not installed." ) | Out-Null
+        Write-LogMessage -Message "Cannot find CcmExec.exe. SCCM Client is not installed." -Level Error
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec.exe missing.'; Priority=1}
     }
 } catch {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error checking CcmExec.exe: $_" ) | Out-Null
+    Write-LogMessage -Message "Error checking CcmExec.exe: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Error checking SCCM installation.'}
 }
 				
@@ -54,13 +90,13 @@ try {
 try {
     $service = Get-Service -Name CcmExec -ErrorAction Stop
     if ($service.Status -eq 'Running') {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service is running.") | Out-Null
+        Write-LogMessage -Message "CcmExec service is running." -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmExec service is not running. Status: $($service.Status)") | Out-Null
-        $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='CcmExec service not running.'}
+        Write-LogMessage -Message "CcmExec service is not running. Status: $($service.Status)" -Level Warning
+        $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec service stopped.'; Priority=2}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format \"dd-MMM-yy HH:mm:ss\")] Message: CcmExec service not found: $_") | Out-Null
+    Write-LogMessage -Message "CcmExec service not found: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmExec service missing.'; Priority=3}
 }
 
@@ -68,13 +104,13 @@ try {
 try {
     $smsClient = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Client -ErrorAction Stop
     if ($smsClient -and $smsClient.ClientVersion) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client Version: $($smsClient.ClientVersion)") | Out-Null
+        Write-LogMessage -Message "SCCM Client Version: $($smsClient.ClientVersion)" -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Client.ClientVersion is null or empty.") | Out-Null
+        Write-LogMessage -Message "SMS_Client.ClientVersion is null or empty." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Client version not available.'; Priority=50}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Client class: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing SMS_Client class: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='SMS_Client class inaccessible.'; Priority=51}
 }    
 
@@ -82,13 +118,13 @@ try {
 try {
     $mp = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Authority -ErrorAction Stop
     if ($mp -and $mp.Name) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Site Code: $($mp.Name)") | Out-Null
+        Write-LogMessage -Message "SCCM Site Code: $($mp.Name)" -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.Name is null or empty.") | Out-Null
+        Write-LogMessage -Message "SMS_Authority.Name is null or empty." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Site Code not available.'; Priority=4}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SMS_Authority class: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing SMS_Authority class: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='SMS_Authority class inaccessible.'}
 }
 
@@ -96,13 +132,13 @@ try {
 try {
     $ccmClient = Get-CimInstance -Namespace "root\ccm" -ClassName CCM_Client -ErrorAction Stop
     if ($ccmClient -and $ccmClient.ClientId) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client ID: $($ccmClient.ClientId)") | Out-Null
+        Write-LogMessage -Message "SCCM Client ID: $($ccmClient.ClientId)" -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCM_Client.ClientId is null or empty.") | Out-Null
+        Write-LogMessage -Message "CCM_Client.ClientId is null or empty." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Client ID not available.'; Priority=6}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_Client class: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing CCM_Client class: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CCM_Client class inaccessible.'; Priority=7}
 }   
 
@@ -110,13 +146,13 @@ try {
 try {
     $clientSDKTest = Get-CimInstance -Namespace "root\ccm\ClientSDK" -ClassName CCM_Application -ErrorAction Stop | Select-Object -First 1
     if ($clientSDKTest) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible.") | Out-Null
+        Write-LogMessage -Message "ClientSDK namespace accessible." -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: ClientSDK namespace accessible but no applications found.") | Out-Null
+        Write-LogMessage -Message "ClientSDK namespace accessible but no applications found." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace empty.'; Priority=8}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing ClientSDK namespace: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing ClientSDK namespace: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='ClientSDK namespace corrupt.'; Priority=9}
 }
 
@@ -125,13 +161,13 @@ try {
     $policyResult = Get-CimInstance -Namespace "root\ccm\Policy\Machine\ActualConfig" -ClassName CCM_TaskSequence -ErrorAction Stop
     if ($policyResult -and $policyResult.Count -gt 0) {
         $policyCount = $policyResult.Count
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible. Found $policyCount task sequences.") | Out-Null
+        Write-LogMessage -Message "Policy namespace accessible. Found $policyCount task sequences." -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Policy namespace accessible but no task sequences found.") | Out-Null
+        Write-LogMessage -Message "Policy namespace accessible but no task sequences found." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace empty.'; Priority=10}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Policy namespace: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing Policy namespace: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Policy namespace corrupt.'; Priority=11}
 }
 
@@ -139,18 +175,18 @@ try {
 try {
     $execHistoryTest = Get-CimInstance -Namespace "root\ccm\SoftMgmtAgent" -ClassName CCM_ExecutionHistory -ErrorAction Stop | Select-Object -First 1
     if ($execHistoryTest) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SoftMgmtAgent namespace accessible.") | Out-Null
+        Write-LogMessage -Message "SoftMgmtAgent namespace accessible." -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SoftMgmtAgent namespace accessible but no execution history found.") | Out-Null
+        Write-LogMessage -Message "SoftMgmtAgent namespace accessible but no execution history found." -Level Info
         # Note: Empty execution history is normal, so no corruption flag
     }
 } catch {
     # Check if it's just an "Invalid class" error which is common and not corruption
     if ($_.Exception.Message -match "Invalid class") {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SoftMgmtAgent namespace accessible but no CCM_ExecutionHistory class.") | Out-Null
+        Write-LogMessage -Message "SoftMgmtAgent namespace accessible but no CCM_ExecutionHistory class." -Level Info
         # Note: Invalid class is often normal, so no corruption flag
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing SoftMgmtAgent namespace: $_") | Out-Null
+        Write-LogMessage -Message "Error accessing SoftMgmtAgent namespace: $_" -Level Error
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='SoftMgmtAgent namespace corrupt.'; Priority=12}
     }
 }
@@ -159,13 +195,13 @@ try {
 try {
     $tsExecTest = Get-CimInstance -Namespace "root\ccm\SoftMgmtAgent" -ClassName CCM_TSExecutionRequest -ErrorAction Stop | Select-Object -First 1
     if ($tsExecTest) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: TS execution request tracking accessible.") | Out-Null
+        Write-LogMessage -Message "TS execution request tracking accessible." -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: TS execution request tracking accessible but no requests found.") | Out-Null
+        Write-LogMessage -Message "TS execution request tracking accessible but no requests found." -Level Info
         # Note: Empty execution requests is normal, so no corruption flag
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing CCM_TSExecutionRequest class: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing CCM_TSExecutionRequest class: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='TS execution request class corrupt.'; Priority=13}
 }
 
@@ -173,13 +209,13 @@ try {
 try {
     $mp = Get-CimInstance -Namespace "root\ccm" -ClassName SMS_Authority -ErrorAction Stop
     if ($mp -and $mp.CurrentManagementPoint) {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Management Point: $($mp.CurrentManagementPoint)") | Out-Null
+        Write-LogMessage -Message "Management Point: $($mp.CurrentManagementPoint)" -Level Info
     } else {
-        $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SMS_Authority.CurrentManagementPoint is null or empty.") | Out-Null
+        Write-LogMessage -Message "SMS_Authority.CurrentManagementPoint is null or empty." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point not available.'; Priority=14}
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error accessing Management Point information: $_") | Out-Null
+    Write-LogMessage -Message "Error accessing Management Point information: $_" -Level Error
     $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='Management Point information inaccessible.'; Priority=15}
 }
 
@@ -263,12 +299,12 @@ try {
         $ccmEvalResults = $null
     }
 } catch {
-    $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: Error reading CCMEval log: $_") | Out-Null
+    Write-LogMessage -Message "Error reading CCMEval log: $_" -Level Error
     $ccmEvalResults = $null
 }
 
 if ( $ccmEvalResults ) {
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: SCCM Client health check failed per CCMEval logs." ) | Out-Null
+    Write-LogMessage -Message "SCCM Client health check failed per CCMEval logs." -Level Warning
     $mostRecentFail = "$( $ccmEvalResults | Select-Object -Last 1 )"
     
     # Try multiple extraction patterns to get meaningful failure info
@@ -314,7 +350,7 @@ if ( $ccmEvalResults ) {
             $allContext = ($contextErrors | ForEach-Object { 
                 $_ -replace '<!\[LOG\[', '' -replace '\]LOG.*$', '' 
             }) -join "; "
-            $healthLog.Add("[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Context: Health check context errors: $allContext") | Out-Null
+            Write-LogMessage -Message "Health check context errors: $allContext" -Level Info
         } else {
             # No context errors found - indicate this in the failure message
             $failMsg = "Client Health Check: FAILED. No additional info in logs."
@@ -322,45 +358,43 @@ if ( $ccmEvalResults ) {
     }
     
     # Outputs all fail messages within last week to healthcheck.txt
-    $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: $( $ccmEvalResults )." ) | Out-Null
+    Write-LogMessage -Message "$( $ccmEvalResults )." -Level Info
     $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='Corruption in Eval log.'; Priority=53}
 } else {
     # Check why CCMEval results are empty - could indicate missing SCCM installation
     if (-not (Test-Path $ccmEvalLogPath)) {
-        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log not found. SCCM may not be installed or functioning." ) | Out-Null
+        Write-LogMessage -Message "CCMEval log not found. SCCM may not be installed or functioning." -Level Warning
         $healthMessages += [PSCustomObject]@{Severity='Warning'; Message='CCMEval log missing.'; Priority=52}
     } elseif (-not (Test-Path "C:\Windows\ccm\CcmEval.exe")) {
-        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CcmEval.exe not found. SCCM installation incomplete." ) | Out-Null
+        Write-LogMessage -Message "CcmEval.exe not found. SCCM installation incomplete." -Level Error
         $healthMessages += [PSCustomObject]@{Severity='Critical'; Message='CcmEval.exe missing.'; Priority=18}
     } else {
         # Log exists but no recent errors found - this could be genuinely healthy
-        $healthLog.Add( "[$(get-date -Format "dd-MMM-yy HH:mm:ss")] Message: CCMEval log exists but no recent errors found in last 7 days." ) | Out-Null
+        Write-LogMessage -Message "CCMEval log exists but no recent errors found in last 7 days." -Level Info
     }
 }
-
 
 #===============
 # REPORT RESULTS (NUMBERED PRIORITY)
 #===============
 
 if ($healthMessages.Count -eq 0) {
-    $results = "Healthy Client"
+    $results = "Healthy"
 } elseif ($healthMessages.Count -eq 1) {
     if ($healthMessages[0].Message -eq "Corruption in Eval log." -and $failMsg) {
-        $results = "Corrupt Client. $failMsg"
+        $results = "Corrupt Client: $failMsg"
     } else {
-        $results = "Corrupt Client. [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
+        $results = "Corrupt Client: [$($healthMessages[0].Severity)] $($healthMessages[0].Message)"
     }
 } else {
-    $sortedMessages = $healthMessages | Sort-Object Priority, Severity, Message # Sorted in ascending priority order,
+    $sortedMessages = $healthMessages | Sort-Object Priority, Severity, Message
     $topError = $sortedMessages[0]
     $additionalCount = $healthMessages.Count - 1
-    $results = "Corrupt Client. [$($topError.Severity)] $($topError.Message) (+ $additionalCount more issues in log)"
+    $results = "Corrupt Client: [$($topError.Severity)] $($topError.Message) (+ $additionalCount more issues)"
 }
 
 if ( -not ( Test-Path $healthLogPath )){
-    mkdir $healthLogPath
+    mkdir $healthLogPath | Out-Null
 }
 
-$healthLog >> $healthLogPath\HealthCheck.txt
 return $results
