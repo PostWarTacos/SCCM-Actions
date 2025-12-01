@@ -189,46 +189,332 @@ Write-LogMessage -message "Starting SCCM reinstallation for site code: $SiteCode
 Write-LogMessage -message "Session Mode: $(if ($Invoke) { 'Interactive' } else { 'Non-Interactive (Scheduled Task/Service)' })"
 
 # -------------------- FIX WMI AND WINDOWS INSTALLER -------------------- #
-Write-LogMessage -message "(Step 1 of 5) Verifying and repairing WMI and Windows Installer services."
+Write-LogMessage -message "(Step 1 of 5) Preparing system for SCCM installation."
 
-# Always reset WMI repository before SCCM installation to prevent MOF compilation errors
-# WMI can appear healthy but still have corruption that breaks MOF compilation
-Write-LogMessage -message "Resetting WMI repository to ensure clean state for SCCM installation..."
+# CRITICAL: Remove any Windows Installer registration of SCCM to force clean install
+Write-LogMessage -message "Removing SCCM product registrations from Windows Installer database..."
+
+# Known SCCM product GUID from logs
+$sccmProductGuid = "{987AABAD-F544-404E-86C6-215EAFBEB7C0}"
+
 try {
-    # Stop WMI service
-    Write-LogMessage -message "Stopping WMI service..."
-    Stop-Service -Name Winmgmt -Force -ErrorAction Stop
-    Start-Sleep -Seconds 3
+    # Target the specific product GUID first
+    $guidPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$sccmProductGuid",
+        "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$sccmProductGuid"
+    )
     
-    # Reset WMI repository
-    Write-LogMessage -message "Resetting WMI repository..."
-    $wmiadapPath = Join-Path $env:SystemRoot "System32\wbem\winmgmt.exe"
-    $resetProc = Start-Process -FilePath $wmiadapPath -ArgumentList "/resetrepository" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-    
-    if ($resetProc.ExitCode -eq 0) {
-        Write-LogMessage -Level Success -Message "WMI repository reset successfully."
-    } else {
-        Write-LogMessage -Level Warning -Message "WMI reset returned exit code: $($resetProc.ExitCode)"
+    foreach ($path in $guidPaths) {
+        if (Test-Path $path) {
+            Write-LogMessage -Level Warning -Message "Found SCCM product registration: $path"
+            try {
+                Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
+                Write-LogMessage -Level Success -Message "Removed product registration"
+            }
+            catch {
+                Write-LogMessage -Level Error -Message "Failed to remove $path : $_"
+            }
+        }
     }
     
-    Start-Sleep -Seconds 3
+    # Also sweep for any Configuration Manager entries
+    $productKeys = @()
+    $productKeys += Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Where-Object {
+        $displayName = $_.GetValue("DisplayName")
+        $displayName -like "*Configuration Manager*" -or $displayName -like "*System Center*"
+    }
+    $productKeys += Get-ChildItem "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Where-Object {
+        $displayName = $_.GetValue("DisplayName")
+        $displayName -like "*Configuration Manager*" -or $displayName -like "*System Center*"
+    }
     
-    # Start WMI service
-    Write-LogMessage -message "Starting WMI service..."
-    Start-Service -Name Winmgmt -ErrorAction Stop
-    Start-Sleep -Seconds 5
+    if ($productKeys.Count -gt 0) {
+        Write-LogMessage -Level Warning -Message "Found $($productKeys.Count) additional SCCM-related registration(s)."
+        foreach ($key in $productKeys) {
+            $displayName = $key.GetValue("DisplayName")
+            Write-LogMessage -Level Warning -Message "Removing: '$displayName' at $($key.PSPath)"
+            try {
+                Remove-Item -Path $key.PSPath -Recurse -Force -ErrorAction Stop
+                Write-LogMessage -Level Success -Message "Removed registry key"
+            }
+            catch {
+                Write-LogMessage -Level Error -Message "Failed to remove: $_"
+            }
+        }
+    }
     
-    # Verify WMI is responsive
-    $wmiTest = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
-    if ($wmiTest) {
-        Write-LogMessage -Level Success -Message "WMI service is running and responsive after reset."
-    } else {
-        Write-LogMessage -Level Warning -Message "WMI service started but query test failed."
+    # Clean Windows Installer cached package database and component registrations
+    Write-LogMessage -message "Cleaning Windows Installer database for SCCM components..."
+    try {
+        $removedCount = 0
+        
+        # Remove from UserData\Products (per-machine installations)
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products") {
+            Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products" -ErrorAction SilentlyContinue | ForEach-Object {
+                $productKey = $_
+                $installProps = Get-ItemProperty -Path "$($productKey.PSPath)\InstallProperties" -ErrorAction SilentlyContinue
+                if ($installProps.DisplayName -like "*Configuration Manager*" -or $installProps.DisplayName -like "*CCM*") {
+                    try {
+                        Write-LogMessage -Level Warning -Message "Removing installer product: $($installProps.DisplayName)"
+                        Remove-Item -Path $productKey.PSPath -Recurse -Force -ErrorAction Stop
+                        $removedCount++
+                    }
+                    catch {
+                        Write-LogMessage -Level Warning -Message "Could not remove product: $_"
+                    }
+                }
+            }
+        }
+        
+        # Remove from UserData\Components (this is what causes baseline detection!)
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components") {
+            $componentCount = 0
+            Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components" -ErrorAction SilentlyContinue | ForEach-Object {
+                $componentKey = $_
+                $values = Get-ItemProperty -Path $componentKey.PSPath -ErrorAction SilentlyContinue
+                # Check if any value points to CCM or SCCM paths
+                $hasSCCM = $false
+                foreach ($prop in $values.PSObject.Properties) {
+                    if ($prop.Value -match "CCM|SMS|Configuration Manager") {
+                        $hasSCCM = $true
+                        break
+                    }
+                }
+                
+                if ($hasSCCM) {
+                    try {
+                        Remove-Item -Path $componentKey.PSPath -Recurse -Force -ErrorAction Stop
+                        $componentCount++
+                    }
+                    catch {
+                        # Component may be in use
+                    }
+                }
+            }
+            if ($componentCount -gt 0) {
+                Write-LogMessage -Level Success -Message "Removed $componentCount SCCM component registrations"
+                $removedCount += $componentCount
+            }
+        }
+        
+        # Remove from UpgradeCodes
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes") {
+            Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes" -ErrorAction SilentlyContinue | ForEach-Object {
+                $upgradeKey = $_
+                $values = Get-ItemProperty -Path $upgradeKey.PSPath -ErrorAction SilentlyContinue
+                foreach ($prop in $values.PSObject.Properties) {
+                    if ($prop.Name -eq $sccmProductGuid.ToUpper().Replace("{","").Replace("}","").Replace("-","")) {
+                        try {
+                            Remove-ItemProperty -Path $upgradeKey.PSPath -Name $prop.Name -Force -ErrorAction Stop
+                            Write-LogMessage -Level Success -Message "Removed upgrade code reference"
+                            $removedCount++
+                        }
+                        catch {}
+                    }
+                }
+            }
+        }
+        
+        if ($removedCount -eq 0) {
+            Write-LogMessage -Level Info -Message "No SCCM entries found in Windows Installer database"
+        } else {
+            Write-LogMessage -Level Success -Message "Removed $removedCount Windows Installer entries"
+        }
+    }
+    catch {
+        Write-LogMessage -Level Warning -Message "Error cleaning installer database: $_"
+    }
+    
+    # Force Windows Installer to rebuild cache by stopping/starting service
+    Write-LogMessage -message "Restarting Windows Installer service to clear cache..."
+    try {
+        Restart-Service -Name msiserver -Force -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        Write-LogMessage -Level Success -Message "Windows Installer service restarted"
+    }
+    catch {
+        Write-LogMessage -Level Warning -Message "Could not restart Windows Installer service: $_"
+    }
+    
+    # Verify the product GUID is no longer registered
+    $stillExists = $false
+    foreach ($path in $guidPaths) {
+        if (Test-Path $path) {
+            Write-LogMessage -Level Error -Message "CRITICAL: Product GUID still exists at $path after removal attempt!"
+            $stillExists = $true
+        }
+    }
+    
+    if (-not $stillExists) {
+        Write-LogMessage -Level Success -Message "Verified: SCCM product GUID removed from registry"
     }
 }
 catch {
-    Write-LogMessage -Level Error -Message "Failed to reset WMI: $_"
-    Write-LogMessage -Level Warning -Message "Continuing with installation attempt anyway..."
+    Write-LogMessage -Level Error -Message "Error during product registration cleanup: $_"
+}
+
+# Ensure SCCM namespaces are completely removed
+Write-LogMessage -message "Verifying SCCM namespaces are removed..."
+try {
+    $namespacesToCheck = @(
+        @{Namespace="root"; Name="CCM"},
+        @{Namespace="root"; Name="CCMVDI"},
+        @{Namespace="root"; Name="SmsDm"},
+        @{Namespace="root\cimv2"; Name="sms"}
+    )
+    
+    $foundNamespaces = @()
+    foreach ($ns in $namespacesToCheck) {
+        $exists = Get-CimInstance -Query "Select * From __Namespace Where Name='$($ns.Name)'" -Namespace $ns.Namespace -ErrorAction SilentlyContinue
+        if ($exists) {
+            $foundNamespaces += "$($ns.Namespace)\$($ns.Name)"
+            Write-LogMessage -Level Warning -Message "Found existing namespace: $($ns.Namespace)\$($ns.Name)"
+            try {
+                $exists | Remove-CimInstance -Confirm:$false -ErrorAction Stop
+                Write-LogMessage -Level Success -Message "Removed $($ns.Namespace)\$($ns.Name)"
+            }
+            catch {
+                Write-LogMessage -Level Error -Message "Failed to remove $($ns.Namespace)\$($ns.Name): $_"
+            }
+        }
+    }
+    
+    if ($foundNamespaces.Count -eq 0) {
+        Write-LogMessage -Level Success -Message "Verified: No SCCM namespaces present."
+    } else {
+        Write-LogMessage -Level Warning -Message "Removed $($foundNamespaces.Count) existing SCCM namespace(s)."
+    }
+}
+catch {
+    Write-LogMessage -Level Warning -Message "Error checking namespaces: $_"
+}
+
+# Verify WMI is functional
+Write-LogMessage -message "Verifying WMI service status..."
+try {
+    $wmiService = Get-Service -Name Winmgmt -ErrorAction Stop
+    if ($wmiService.Status -ne 'Running') {
+        Write-LogMessage -Level Warning -Message "WMI service not running. Starting..."
+        Start-Service -Name Winmgmt -ErrorAction Stop
+        Start-Sleep -Seconds 10
+    } else {
+        Write-LogMessage -Level Success -Message "WMI service is running."
+    }
+    
+    # CRITICAL FIX: Test WMI MOF compilation capability (not just query ability)
+    # The error 80041002 happens during MOF compilation, so we need to test that specifically
+    Write-LogMessage -message "Testing WMI MOF compilation capability..."
+    $mofTestPassed = $false
+    try {
+        # First verify basic WMI connectivity
+        $null = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        
+        # Now test MOF compilation by creating a simple test MOF file
+        $testMofPath = "$env:TEMP\WMITest_$(Get-Date -Format 'yyyyMMddHHmmss').mof"
+        $testMofContent = @"
+#pragma namespace("\\\\.\\root\\cimv2")
+
+[dynamic, provider("CIMWin32")]
+class WMI_Test_Class
+{
+    [key] string TestKey;
+    string TestValue;
+};
+"@
+        Set-Content -Path $testMofPath -Value $testMofContent -Force
+        
+        # Try to compile the test MOF using mofcomp.exe
+        $mofcompPath = Join-Path $env:SystemRoot "System32\wbem\mofcomp.exe"
+        $mofcompResult = & $mofcompPath $testMofPath 2>&1
+        $mofcompExitCode = $LASTEXITCODE
+        
+        # Clean up test MOF file
+        Remove-Item -Path $testMofPath -Force -ErrorAction SilentlyContinue
+        
+        if ($mofcompExitCode -eq 0) {
+            Write-LogMessage -Level Success -Message "WMI MOF compilation test passed."
+            
+            # Clean up the test class we created
+            try {
+                $testClass = Get-CimClass -ClassName "WMI_Test_Class" -Namespace "root\cimv2" -ErrorAction SilentlyContinue
+                if ($testClass) {
+                    Remove-CimClass -InputObject $testClass -ErrorAction SilentlyContinue
+                }
+            }
+            catch {}
+            
+            $mofTestPassed = $true
+        }
+        else {
+            throw "MOF compilation failed with exit code $mofcompExitCode. Output: $mofcompResult"
+        }
+    }
+    catch {
+        Write-LogMessage -Level Warning -Message "WMI MOF compilation test failed: $_"
+        Write-LogMessage -Level Warning -Message "Attempting WMI repository repair..."
+        
+        try {
+            # Stop WMI service
+            Stop-Service -Name Winmgmt -Force -ErrorAction Stop
+            Start-Sleep -Seconds 5
+            
+            # Try salvage first (preserves data)
+            Write-LogMessage -message "Attempting repository salvage..."
+            $salvageResult = & winmgmt.exe /salvagerepository 2>&1
+            Start-Sleep -Seconds 5
+            
+            # Restart WMI
+            Start-Service -Name Winmgmt -ErrorAction Stop
+            Start-Sleep -Seconds 10
+            
+            # Re-test MOF compilation after salvage
+            $testMofPath = "$env:TEMP\WMITest_$(Get-Date -Format 'yyyyMMddHHmmss').mof"
+            Set-Content -Path $testMofPath -Value $testMofContent -Force
+            $mofcompPath = Join-Path $env:SystemRoot "System32\wbem\mofcomp.exe"
+            $mofcompResult = & $mofcompPath $testMofPath 2>&1
+            $mofcompExitCode = $LASTEXITCODE
+            Remove-Item -Path $testMofPath -Force -ErrorAction SilentlyContinue
+            
+            if ($mofcompExitCode -eq 0) {
+                Write-LogMessage -Level Success -Message "WMI repository salvaged successfully - MOF compilation now works"
+                $mofTestPassed = $true
+            }
+            else {
+                throw "MOF compilation still fails after salvage"
+            }
+        }
+        catch {
+            Write-LogMessage -Level Error -Message "WMI salvage failed: $_"
+            Write-LogMessage -Level Warning -Message "Attempting aggressive repository reset..."
+            
+            try {
+                # Last resort: full repository reset (loses all WMI data)
+                Stop-Service -Name Winmgmt -Force -ErrorAction Stop
+                Start-Sleep -Seconds 5
+                
+                Write-LogMessage -message "Performing WMI repository reset (this may take several minutes)..."
+                $resetResult = & winmgmt.exe /resetrepository 2>&1
+                Start-Sleep -Seconds 30  # Reset takes much longer than salvage
+                
+                Start-Service -Name Winmgmt -ErrorAction Stop
+                Start-Sleep -Seconds 15
+                
+                # Final test
+                $null = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+                Write-LogMessage -Level Success -Message "WMI repository reset completed"
+                $mofTestPassed = $true
+            }
+            catch {
+                Write-LogMessage -Level Error -Message "WMI repository reset failed: $_"
+                Write-LogMessage -Level Error -Message "CRITICAL: WMI is corrupted and cannot be repaired automatically"
+                Write-LogMessage -Level Warning -Message "Installation will likely fail. Manual WMI repair may be required."
+            }
+        }
+    }
+}
+catch {
+    Write-LogMessage -Level Error -Message "WMI test failed: $_"
+    Write-LogMessage -Level Warning -Message "Installation may fail due to WMI issues."
 }
 
 # Test Windows Installer service
@@ -287,17 +573,69 @@ if (-not $script:Invoke) {
     Write-Output "Step 1 - WMI and Windows Installer repair completed."
 }
 
+# CRITICAL: Restart WMI service immediately before installation to ensure clean state
+# This prevents MOF file locks and namespace conflicts during installation
+Write-LogMessage -message "Restarting WMI service to ensure clean state for installation..."
+try {
+    # First, remove any corrupted MDM WMI classes that cause 80041002 errors
+    Write-LogMessage -message "Checking for corrupted MDM_ConfigSetting WMI class..."
+    try {
+        $mdmClass = Get-CimClass -ClassName "MDM_ConfigSetting" -Namespace "root\cimv2\mdm\dmmap" -ErrorAction SilentlyContinue
+        if ($mdmClass) {
+            Write-LogMessage -Level Warning -Message "Found MDM_ConfigSetting class - removing to prevent WMI conflicts..."
+            Get-CimInstance -ClassName "MDM_ConfigSetting" -Namespace "root\cimv2\mdm\dmmap" -ErrorAction SilentlyContinue | Remove-CimInstance -ErrorAction SilentlyContinue
+            Write-LogMessage -Level Success -Message "Removed MDM_ConfigSetting instances"
+        }
+    }
+    catch {
+        # MDM namespace may not exist or be accessible - this is fine
+        Write-LogMessage -Level Info -Message "MDM namespace not accessible (expected on non-MDM systems)"
+    }
+    
+    Restart-Service -Name Winmgmt -Force -ErrorAction Stop
+    Start-Sleep -Seconds 10
+    Write-LogMessage -Level Success -Message "WMI service restarted successfully"
+}
+catch {
+    Write-LogMessage -Level Warning -Message "Could not restart WMI service: $_"
+}
+
+# Force uninstall via msiexec if product GUID still registered
+Write-LogMessage -message "Forcing uninstall of any remaining SCCM product via msiexec..."
+try {
+    $sccmProductGuid = "{987AABAD-F544-404E-86C6-215EAFBEB7C0}"
+    
+    # Try silent uninstall with no UI
+    Write-LogMessage -message "Running: msiexec.exe /x $sccmProductGuid /qn /norestart"
+    $uninstallProc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $sccmProductGuid /qn /norestart" -Wait -PassThru -NoNewWindow
+    
+    if ($uninstallProc.ExitCode -eq 0) {
+        Write-LogMessage -Level Success -Message "msiexec uninstall completed successfully (exit code 0)"
+    }
+    elseif ($uninstallProc.ExitCode -eq 1605) {
+        Write-LogMessage -Level Success -Message "Product not installed (exit code 1605) - good for clean install"
+    }
+    else {
+        Write-LogMessage -Level Warning -Message "msiexec uninstall returned exit code $($uninstallProc.ExitCode)"
+    }
+    
+    Start-Sleep -Seconds 3
+}
+catch {
+    Write-LogMessage -Level Warning -Message "msiexec uninstall encountered error: $_"
+}
+
 Write-LogMessage -message "(Step 2 of 5) Attempting reinstall."
 try {
     # Configure installation parameters based on site code
-    # DDS site installation with simplified parameters
+    # REMOVED /logon switch - it causes failure if any previous installation artifacts detected
+    # Added /ForceInstall to bypass any existing installation checks
     if ( $SiteCode -eq "DDS") {
-        # Note: Commented line shows full parameter set for future reference
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose
+        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/ForceInstall SMSSITECODE=$SiteCode" -PassThru -Verbose
     }
     # PCI site installation with site code specification
     elseif ( $SiteCode -eq "PCI" ) {
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode" -PassThru -Verbose    
+        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/ForceInstall SMSSITECODE=$SiteCode" -PassThru -Verbose    
     }
        
     # Wait for installation process to complete and vlidate exit code
