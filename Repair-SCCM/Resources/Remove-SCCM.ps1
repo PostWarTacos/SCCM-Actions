@@ -508,26 +508,58 @@ foreach ( $key in $keys ){
 # These namespaces contain SCCM client configuration and status information
 # Removing them ensures complete cleanup of SCCM client data structures
 Write-LogMessage -message "(Step 7 of 10) Remove SCCM namespaces from WMI repo ($cleanupMode)."
+
+# Note: Direct namespace deletion can cause WMI corruption. Only remove if namespaces still exist
+# after uninstall, and let the reinstall script handle WMI repository rebuild if needed.
 try {
-    # Remove main CCM namespace (Configuration Manager Client)
-    Get-CimInstance -Query "Select * From __Namespace Where Name='CCM'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+    $namespacesRemoved = 0
     
-    # Remove VDI-specific CCM namespace (Virtual Desktop Infrastructure)
-    Get-CimInstance -Query "Select * From __Namespace Where Name='CCMVDI'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+    # Check and remove main CCM namespace (Configuration Manager Client)
+    $ccmNamespace = Get-CimInstance -Query "Select * From __Namespace Where Name='CCM'" -Namespace "root" -ErrorAction SilentlyContinue
+    if ($ccmNamespace) {
+        Write-LogMessage -Level Warning -Message "CCM namespace still exists after uninstall. Removing..."
+        $ccmNamespace | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+        $namespacesRemoved++
+    }
     
-    # Remove SMS Device Management namespace
-    Get-CimInstance -Query "Select * From __Namespace Where Name='SmsDm'" -Namespace "root" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+    # Check and remove VDI-specific CCM namespace (Virtual Desktop Infrastructure)
+    $ccmvdiNamespace = Get-CimInstance -Query "Select * From __Namespace Where Name='CCMVDI'" -Namespace "root" -ErrorAction SilentlyContinue
+    if ($ccmvdiNamespace) {
+        Write-LogMessage -Level Warning -Message "CCMVDI namespace still exists after uninstall. Removing..."
+        $ccmvdiNamespace | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+        $namespacesRemoved++
+    }
     
-    # Remove legacy SMS namespace from cimv2
-    Get-CimInstance -Query "Select * From __Namespace Where Name='sms'" -Namespace "root\cimv2" -ErrorAction SilentlyContinue | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+    # Check and remove SMS Device Management namespace
+    $smsdmNamespace = Get-CimInstance -Query "Select * From __Namespace Where Name='SmsDm'" -Namespace "root" -ErrorAction SilentlyContinue
+    if ($smsdmNamespace) {
+        Write-LogMessage -Level Warning -Message "SmsDm namespace still exists after uninstall. Removing..."
+        $smsdmNamespace | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+        $namespacesRemoved++
+    }
     
-    Write-LogMessage -Level Success -Message "Namespace(s) found and removed."
+    # Check and remove legacy SMS namespace from cimv2
+    $smsNamespace = Get-CimInstance -Query "Select * From __Namespace Where Name='sms'" -Namespace "root\cimv2" -ErrorAction SilentlyContinue
+    if ($smsNamespace) {
+        Write-LogMessage -Level Warning -Message "SMS namespace still exists in cimv2 after uninstall. Removing..."
+        $smsNamespace | Remove-CimInstance -Confirm:$false -ErrorAction SilentlyContinue
+        $namespacesRemoved++
+    }
+    
+    if ($namespacesRemoved -gt 0) {
+        Write-LogMessage -Level Success -Message "Removed $namespacesRemoved SCCM namespace(s)."
+        Write-LogMessage -Level Info -Message "Note: WMI repository will be rebuilt during reinstallation to ensure clean state."
+    } else {
+        Write-LogMessage -Level Success -Message "No SCCM namespaces found (already cleaned by uninstaller)."
+    }
+    
     if (-not $script:Invoke) {
         Write-Output "Step 7 - Namespace Removal Completed" # Output for Collection Commander
     }
 }
 catch {
-    Write-LogMessage -Level Error -Message "Failed to remove namespace(s). Continuing script but may cause issues."
+    Write-LogMessage -Level Error -Message "Failed to remove namespace(s): $_"
+    Write-LogMessage -Level Warning -Message "Continuing script. WMI will be rebuilt during reinstall."
     $errorCount++
 }
 
