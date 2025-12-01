@@ -529,8 +529,7 @@ foreach ( $t in $targets ){
         
         # Check removal results based on exit codes:
         # Accept new string return values from Remove-SCCM.ps1
-        #write-host $removalResult
-        Write-Host $removalResult.GetType()
+
         switch ($removalResult) {
             "Quick Fix Success" {
                 Write-LogMessage -Level Success -Message "SCCM client quick fix successful on $t. Skipping full remediation."
