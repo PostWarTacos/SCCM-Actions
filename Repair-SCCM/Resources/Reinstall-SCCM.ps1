@@ -315,6 +315,105 @@ try {
             }
         }
         
+        # Clean Windows Installer Folders cache (physical MSI files)
+        Write-LogMessage -message "Cleaning Windows Installer Folders cache..."
+        $installerFolders = "$env:SystemRoot\Installer"
+        if (Test-Path $installerFolders) {
+            # Find all MSI files that contain SCCM/CCM in their summary info
+            Get-ChildItem "$installerFolders\*.msi" -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $msiPath = $_.FullName
+                    # Use Windows Installer COM object to read MSI properties
+                    $installer = New-Object -ComObject WindowsInstaller.Installer
+                    $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($msiPath, 0))
+                    $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, @("SELECT Value FROM Property WHERE Property='ProductName'"))
+                    $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+                    $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+                    
+                    if ($record) {
+                        $productName = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+                        if ($productName -like "*Configuration Manager*" -or $productName -like "*System Center*") {
+                            Write-LogMessage -Level Warning -Message "Found cached MSI: $productName at $msiPath"
+                            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($record) | Out-Null
+                            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($view) | Out-Null
+                            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($database) | Out-Null
+                            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($installer) | Out-Null
+                            
+                            # Remove the cached MSI file
+                            Remove-Item -Path $msiPath -Force -ErrorAction Stop
+                            Write-LogMessage -Level Success -Message "Removed cached MSI file"
+                            $removedCount++
+                        }
+                    }
+                }
+                catch {
+                    # COM errors or file in use - skip
+                }
+            }
+        }
+        
+        # Clean InProgressInstallInfo (this tracks active/incomplete installations)
+        Write-LogMessage -message "Cleaning incomplete installation tracking..."
+        $inProgressPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\InProgressInstallInfo"
+        if (Test-Path $inProgressPath) {
+            Get-ChildItem $inProgressPath -ErrorAction SilentlyContinue | ForEach-Object {
+                $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                if ($props.ProductName -like "*Configuration Manager*" -or $props.ProductName -like "*System Center*") {
+                    Write-LogMessage -Level Warning -Message "Removing incomplete install tracking: $($props.ProductName)"
+                    Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction Stop
+                    $removedCount++
+                }
+            }
+        }
+        
+        # Clean PendingFileRenameOperations (Windows Installer pending operations)
+        Write-LogMessage -message "Clearing pending file operations..."
+        $pendingPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+        $pendingOps = Get-ItemProperty -Path $pendingPath -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+        if ($pendingOps) {
+            $opsArray = $pendingOps.PendingFileRenameOperations
+            $filteredOps = @()
+            $removed = 0
+            
+            for ($i = 0; $i -lt $opsArray.Count; $i++) {
+                if ($opsArray[$i] -notmatch "CCM|SMS|Configuration Manager") {
+                    $filteredOps += $opsArray[$i]
+                }
+                else {
+                    $removed++
+                }
+            }
+            
+            if ($removed -gt 0) {
+                if ($filteredOps.Count -eq 0) {
+                    Remove-ItemProperty -Path $pendingPath -Name "PendingFileRenameOperations" -Force -ErrorAction Stop
+                    Write-LogMessage -Level Success -Message "Removed all SCCM pending file operations"
+                }
+                else {
+                    Set-ItemProperty -Path $pendingPath -Name "PendingFileRenameOperations" -Value $filteredOps -Force -ErrorAction Stop
+                    Write-LogMessage -Level Success -Message "Removed $removed SCCM pending file operations"
+                }
+                $removedCount += $removed
+            }
+        }
+        
+        # Clean Patches registry (MSP patch cache that references the product)
+        Write-LogMessage -message "Cleaning MSI patch cache..."
+        $patchesPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Patches"
+        if (Test-Path $patchesPath) {
+            Get-ChildItem $patchesPath -ErrorAction SilentlyContinue | ForEach-Object {
+                $patchKey = $_
+                $props = Get-ItemProperty -Path $patchKey.PSPath -ErrorAction SilentlyContinue
+                # Check if patch references SCCM product GUID
+                $transformedGuid = $sccmProductGuid.ToUpper().Replace("{","").Replace("}","").Replace("-","")
+                if ($props.PSObject.Properties.Name -contains $transformedGuid) {
+                    Write-LogMessage -Level Warning -Message "Removing patch registration for SCCM"
+                    Remove-Item -Path $patchKey.PSPath -Recurse -Force -ErrorAction Stop
+                    $removedCount++
+                }
+            }
+        }
+        
         if ($removedCount -eq 0) {
             Write-LogMessage -Level Info -Message "No SCCM entries found in Windows Installer database"
         } else {
@@ -389,8 +488,8 @@ catch {
     Write-LogMessage -Level Warning -Message "Error checking namespaces: $_"
 }
 
-# Verify WMI is functional
-Write-LogMessage -message "Verifying WMI service status..."
+    # Verify WMI is functional and repository is healthy
+Write-LogMessage -message "Verifying WMI service status and repository health..."
 try {
     $wmiService = Get-Service -Name Winmgmt -ErrorAction Stop
     if ($wmiService.Status -ne 'Running') {
@@ -401,7 +500,52 @@ try {
         Write-LogMessage -Level Success -Message "WMI service is running."
     }
     
-    # CRITICAL FIX: Test WMI MOF compilation capability (not just query ability)
+    # Check WMI repository consistency before MOF testing
+    Write-LogMessage -message "Checking WMI repository consistency..."
+    try {
+        $repoCheck = & winmgmt.exe /verifyrepository 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-LogMessage -Level Success -Message "WMI repository is consistent"
+        } else {
+            Write-LogMessage -Level Warning -Message "WMI repository verification failed. Attempting salvage..."
+            Stop-Service -Name Winmgmt -Force -ErrorAction Stop
+            Start-Sleep -Seconds 5
+            $null = & winmgmt.exe /salvagerepository 2>&1
+            Start-Sleep -Seconds 10
+            Start-Service -Name Winmgmt -ErrorAction Stop
+            Start-Sleep -Seconds 10
+            
+            # Verify again after salvage
+            $repoCheck2 = & winmgmt.exe /verifyrepository 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-LogMessage -Level Error -Message "WMI repository still inconsistent after salvage. Performing FULL RESET..."
+                Write-LogMessage -Level Warning -Message "This will destroy all WMI data and rebuild from scratch. This is required for SCCM installation to succeed."
+                
+                Stop-Service -Name Winmgmt -Force -ErrorAction Stop
+                Start-Sleep -Seconds 5
+                
+                # Nuclear option: complete repository reset
+                $null = & winmgmt.exe /resetrepository 2>&1
+                Start-Sleep -Seconds 30  # Reset takes much longer
+                
+                Start-Service -Name Winmgmt -ErrorAction Stop
+                Start-Sleep -Seconds 15
+                
+                # Final verification
+                $repoCheck3 = & winmgmt.exe /verifyrepository 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-LogMessage -Level Success -Message "WMI repository reset and verified"
+                } else {
+                    throw "WMI repository reset failed - manual intervention required"
+                }
+            } else {
+                Write-LogMessage -Level Success -Message "WMI repository salvaged successfully"
+            }
+        }
+    }
+    catch {
+        Write-LogMessage -Level Warning -Message "Could not verify WMI repository: $_"
+    }    # CRITICAL FIX: Test WMI MOF compilation capability (not just query ability)
     # The error 80041002 happens during MOF compilation, so we need to test that specifically
     Write-LogMessage -message "Testing WMI MOF compilation capability..."
     $mofTestPassed = $false
@@ -627,24 +771,34 @@ catch {
 
 Write-LogMessage -message "(Step 2 of 5) Attempting reinstall."
 try {
-    # Configure installation parameters based on site code
-    # REMOVED /logon switch - it causes failure if any previous installation artifacts detected
-    # Added /ForceInstall to bypass any existing installation checks
-    if ( $SiteCode -eq "DDS") {
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/ForceInstall SMSSITECODE=$SiteCode" -PassThru -Verbose
-    }
-    # PCI site installation with site code specification
-    elseif ( $SiteCode -eq "PCI" ) {
-        $proc = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/ForceInstall SMSSITECODE=$SiteCode" -PassThru -Verbose    
-    }
-       
-    # Wait for installation process to complete and vlidate exit code
-    $proc.WaitForExit()
-    if ( $proc.ExitCode -ne 0 ){
-        throw "SCCM install failed with exit code $($proc.exitcode)"
-    }
-    Write-LogMessage -Level Success -Message "Reinstall complete."
+    # Configure installation parameters
+    # Using /logon to run in foreground/blocking mode for reliable exit code detection
+    # Aggressive cache cleanup above should prevent cached baseline detection issues
+    # CRITICAL: Must specify /mp: because AD query returns 0 MPs (error 0x87d00215)
+    # Multiple MPs specified - SCCM will auto-select the best one based on network proximity
+    $setupProcess = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:VCANZ221.dds.dillards.net;VOTCZ222.dds.dillards.net;VOTCZ223.dds.dillards.net" -PassThru -Verbose
+    $setupProcess.WaitForExit()
+    $exitCode = $setupProcess.ExitCode
+    Write-LogMessage -message "ccmsetup.exe completed with exit code: $exitCode"
     
+    # Check for installation failure
+    # Exit code 0 = Success, 7 = Reboot required (also success), any other = failure
+    if ($exitCode -eq 0 -or $exitCode -eq 7) {
+        if ($exitCode -eq 7) {
+            Write-LogMessage -Level Warning -Message "ccmsetup.exe completed successfully but requires reboot (exit code 7)"
+        }
+        Write-LogMessage -Level Success -Message "Reinstall process initiated."
+    }
+    else {
+        Write-LogMessage -Level Error -Message "ccmsetup.exe failed with exit code $exitCode"
+        if (-not $script:Invoke) {        # Query all Management Points for DDS site
+        Get-WmiObject -Namespace "root\sms\site_DDS" -Class SMS_SCI_SysResUse -ComputerName "SCANZ223" | 
+            Where-Object {$_.RoleName -eq "SMS Management Point"} | 
+            Select-Object NetworkOSPath, NALPath, RoleName
+            Write-Output "Step 2 - SCCM reinstall failed with exit code $exitCode"
+        }
+        throw "SCCM installation failed with exit code $exitCode"
+    }
     # Monitor service installation - ccmexec service creation can take time
     Write-LogMessage -message "Waiting for service to be installed."
     if ($Host.Name -eq 'ConsoleHost') { return "ReinstallComplete" }
