@@ -75,8 +75,8 @@
 
 .NOTES
     Author: Matthew Wurtz
-    Date: 14-Nov-25
-    Version: 1.3
+    Date: 02-Dec-25
+    Version: 1.4
     
     Prerequisites:
     - PowerShell remoting enabled on target computers
