@@ -776,7 +776,14 @@ try {
     # Aggressive cache cleanup above should prevent cached baseline detection issues
     # CRITICAL: Must specify /mp: because AD query returns 0 MPs (error 0x87d00215)
     # Multiple MPs specified - SCCM will auto-select the best one based on network proximity
-    $setupProcess = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:VCANZ221.dds.dillards.net;VOTCZ222.dds.dillards.net;VOTCZ223.dds.dillards.net" -PassThru -Verbose
+    if ($siteCode -eq "DDS"){
+        $MPs = "VCANZ221.dds.dillards.net;VOTCZ222.dds.dillards.net;VOTCZ223.dds.dillards.net"
+    }
+    Elseif ($siteCode -eq "PCI"){
+        $MPs = "VLRCP221.dpos.loc;VLRCP224.dpos.loc;VMADEPT3.dpos.loc;VOTCP221.dpos.loc"
+    }
+    
+    $setupProcess = Start-Process -FilePath "$localInstallerPath\ccmsetup.exe" -ArgumentList "/logon SMSSITECODE=$SiteCode /mp:$MPs" -PassThru -Verbose
     $setupProcess.WaitForExit()
     $exitCode = $setupProcess.ExitCode
     Write-LogMessage -message "ccmsetup.exe completed with exit code: $exitCode"
