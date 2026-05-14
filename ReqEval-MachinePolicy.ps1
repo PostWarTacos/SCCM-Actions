@@ -1,0 +1,2 @@
+([wmiclass]'ROOT\ccm:SMS_Client').TriggerSchedule('{00000000-0000-0000-0000-000000000021}') | out-null
+([wmiclass]'ROOT\ccm:SMS_Client').TriggerSchedule('{00000000-0000-0000-0000-000000000022}') | out-null; "Request and Eval. MachinePolicy"
